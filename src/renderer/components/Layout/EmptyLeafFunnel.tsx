@@ -153,8 +153,8 @@ export function EmptyLeafFunnel() {
       // split as a permanent empty-leaf placeholder.
       void ipcInvoke<{ id: string; shell?: string; cwd?: string }>(() =>
         window.electronAPI.pty.create(
-          withWorkspaceProfile(
-            withDefaultShell(
+          withDefaultShell(
+            withWorkspaceProfile(
               // 순수 빈 리프(사용자가 split으로 연 셸)만 user-shell로 스탬프해 env
               // 투과. project seed(seedCommand 존재 — initialCommand/exec 브랜치)는
               // 자동화라 미스탬프 → main이 fail-closed로 gated 처리.
@@ -164,9 +164,9 @@ export function EmptyLeafFunnel() {
                 ...bootstrapOptions,
                 ...(seedCommand === undefined ? { spawnKind: 'user-shell' as const } : {}),
               },
-              useStore.getState().defaultShell,
+              activeWorkspace.profile,
             ),
-            activeWorkspace.profile,
+            useStore.getState().defaultShell,
           )
         )
       ).then((result) => {

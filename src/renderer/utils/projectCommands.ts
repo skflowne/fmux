@@ -47,16 +47,16 @@ export async function runProjectCommand(
 
   try {
     const created = await window.electronAPI.pty.create(
-      withWorkspaceProfile(
-        withDefaultShell(
+      withDefaultShell(
+        withWorkspaceProfile(
           {
             workspaceId,
             cwd: project.root,
             initialCommand: command.command,
           },
-          state.defaultShell,
+          ws.profile,
         ),
-        ws.profile,
+        state.defaultShell,
       ),
     ) as { id: string; shell?: string; cwd?: string };
     const fresh = useStore.getState();
