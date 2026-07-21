@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Code running inside WSL can now reach the Windows wmux instance.** wmux is a native Windows app, but a Claude session in WSL runs in a separate VM where neither the Windows named pipe nor the Linux Unix socket is visible to the other side — so hooks, the resume-spool, and turn-end notifications from a WSL agent never made it to the app. The hook bridge now detects WSL, locates the Windows user profile through the mounted drives (preferring the live instance that holds both the auth-token and tcp-port files), and connects over the existing TCP fallback — trying Windows loopback first (WSL2 mirrored networking) and the default-route gateway IP second (WSL2 NAT, the default). The resume-spool is written under the Windows profile so the Windows daemon actually drains it, while the bridge log stays on the local WSL home. To make this reachable, the app's TCP fallback widens its bind from loopback-only to `0.0.0.0` **only when WSL is present** on the machine; every connection still passes the pre-auth rate limit and every RPC still requires the on-disk token, so the wider bind changes which interfaces may attempt a connection, not what authenticates.
+- **Terminal hyperlinks emitted by TUIs (OSC 8) now follow wmux's smart link policy.** Codex and other agents emit clickable links as OSC 8 escape sequences, which xterm routed through a `window.confirm` dialog that never reached wmux — so localhost-in-embedded-browser / external-in-system-browser routing (and the Ctrl/Cmd-click inversion) only worked for plain-text URLs the link detector found. OSC 8 links and detected URLs now share a single activator, so both open the same way.
+
 ## [3.29.0] — 2026-07-21
 
 ### Fixed
