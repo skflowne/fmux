@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Each workspace can pick its own shell.** The shell was a single global setting, so you couldn't keep one workspace on PowerShell and another on WSL — the global choice won everywhere. The workspace profile now has a **Shell** field (Sidebar → workspace profile) that overrides the global default for new panes in that workspace. Precedence is explicit per-pane shell → workspace shell → global default, so an existing global-only setup is unchanged.
+- **WSL/Ubuntu starting directories now work as a workspace startup directory.** A Linux path (`/home/you/projects/x`, `~/projects/x`, or a `\\wsl$\…` / `\\wsl.localhost\…` UNC path) set as a workspace's starting directory used to be rejected — Windows can't stat a Linux path, so the pane silently fell back to your Windows home folder. Paired with a WSL shell, wmux now launches `wsl.exe --cd <path>` so the pane opens directly in that directory, replacing the `cd ~/projects/x && clear` startup-command workaround. Non-WSL panes are unaffected.
+
 ## [3.29.0] — 2026-07-21
 
 ### Fixed
