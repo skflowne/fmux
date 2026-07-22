@@ -8,9 +8,9 @@ import type { DaemonSession, DaemonSessionState, DaemonSessionSupervision, Daemo
 import { RingBuffer } from './RingBuffer';
 import { DaemonPTYBridge } from './DaemonPTYBridge';
 import { PromptEventLog } from './PromptEventLog';
-import { buildSpawnInjection, classifyShell } from './shell-integration';
+import { buildSpawnInjection, classifyShell, installShellIntegration } from './shell-integration';
 import { expandTilde } from '../shared/expandTilde';
-import { splitWslCwd } from '../shared/wslCwd';
+import { applyWslPromptIntegration, isWslShell, splitWslCwd } from '../shared/wslCwd';
 import { buildExecArgs } from './execWrapper';
 import { buildSafeChildEnv } from '../shared/envFilter';
 import { isMac } from '../shared/platform';
@@ -280,7 +280,7 @@ export class DaemonSessionManager extends EventEmitter {
     // pre-fix contaminated blobs are accepted rather than migrated (re-deriving
     // identity on replay would need session→workspace/surface plumbing the
     // daemon deliberately does not have).
-    const env = params.env
+    let env = params.env
       ? stripReservedAuth(params.env)
       : stripReservedNamespace(buildSafeChildEnv(globalThis.process.env));
 
@@ -341,7 +341,10 @@ export class DaemonSessionManager extends EventEmitter {
       // is a supported family (pwsh/bash). Unknown shells (cmd.exe, zsh, etc.)
       // get a plain spawn with no args and silently skip integration.
       try {
-        const injection = buildSpawnInjection(cmd);
+        const wslShell = isWslShell(cmd);
+        const injection = wslShell
+          ? applyWslPromptIntegration(cmd, env, installShellIntegration().bash)
+          : buildSpawnInjection(cmd);
         if (injection) {
           // zsh ZDOTDIR 가로채기: injection이 ZDOTDIR을 wmux 디렉토리로 덮어쓰기
           // 전에, 사용자의 원래 ZDOTDIR(없으면 HOME)을 WMUX_USER_ZDOTDIR로 보존한다.
@@ -351,8 +354,12 @@ export class DaemonSessionManager extends EventEmitter {
             env['WMUX_USER_ZDOTDIR'] = env['ZDOTDIR'] || env['HOME'] || os.homedir();
           }
           spawnArgs = injection.args;
-          for (const [k, v] of Object.entries(injection.env)) {
-            env[k] = v;
+          if (wslShell) {
+            env = injection.env;
+          } else {
+            for (const [k, v] of Object.entries(injection.env)) {
+              env[k] = v;
+            }
           }
         }
       } catch (err) {
