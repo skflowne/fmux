@@ -1,11 +1,11 @@
 /**
  * AutoUpdater
  *
- * update.electronjs.org 기반 자동 업데이트 시스템.
- * Chromium의 net 모듈로 업데이트를 확인하고, Squirrel의 Update.exe로 설치.
+ * update.electronjs.org-based auto-update system.
+ * Checks for updates via Chromium's net module; installs via Squirrel's Update.exe.
  *
- * Electron 내장 autoUpdater(Squirrel의 .NET HttpWebRequest)는
- * GitHub의 다중 302 redirect + TLS 1.2에서 실패하므로 사용하지 않음.
+ * Electron built-in autoUpdater (Squirrel's .NET HttpWebRequest) fails on GitHub's
+ * multi 302 redirect + TLS 1.2, so it is not used.
  */
 
 import { autoUpdater, app, type BrowserWindow, ipcMain, net, shell } from 'electron';
@@ -23,7 +23,7 @@ const UPDATE_SERVER = `https://update.electronjs.org/${REPO}/win32/${app.getVers
 // updater pins the Setup.exe SHA-256 against this before installing.
 const MANIFEST_URL = `https://github.com/${REPO}/releases/latest/download/update-manifest.json`;
 
-// 업데이트 자동 확인 간격 (30분)
+// Auto-update check interval (30 minutes)
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
 // In-app auto-update is Windows-only today. The update-server URL (line above),
@@ -69,10 +69,10 @@ export class AutoUpdater {
       return;
     }
 
-    // 앱 시작 후 15초 뒤 첫 번째 확인 (시작 부하 방지)
+    // First check 15s after app start (avoid startup load)
     setTimeout(() => this.check(), 15_000);
 
-    // 이후 주기적 확인
+    // Periodic checks thereafter
     this.checkTimer = setInterval(() => this.check(), CHECK_INTERVAL_MS);
   }
 
