@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Selecting Forge no longer recolors shell-owned prompts or working-directory segments.** Forge keeps its charcoal-and-orange application chrome while reusing the established Amber Graphite terminal palette, so PS1 and ANSI cwd colors remain stable.
+
 - **Browser-generated PDFs and traces now stay inside Forge Mux's own data namespace.** Export paths previously still used the upstream `~/.wmux/exports` directory; they now resolve under `~/.fmux/exports`, with hermetic path-safety coverage.
 
 - **WSL panes with a git-aware prompt no longer fail to start with a `chdir … failed 2` error.** When a WSL pane had no shell-integration OSC, wmux scraped the working directory from the bash prompt text — and a git-aware prompt (`__git_ps1`) renders `user@host:/path (branch)$`, so the branch decoration was captured as part of the path (`/home/you/projects/locus (feat/locus-v1)`). That polluted directory was previously harmless, but now that a Linux cwd launches via `wsl.exe --cd <path>` it was passed verbatim and `CreateProcess`/`chdir` failed with `ERROR: CreateProcessCommon:810: chdir(…) failed 2` on the non-existent directory. The scraper now strips the trailing ` (branch)` decoration.
