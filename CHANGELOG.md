@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Selecting Forge no longer recolors shell-owned prompts or working-directory segments.** Forge keeps its charcoal-and-orange application chrome while reusing the established Amber Graphite terminal palette, so PS1 and ANSI cwd colors remain stable.
+- **Selecting Forge no longer recolors shell-owned prompts or working-directory segments.** Forge keeps its charcoal-and-orange application chrome while reusing the existing Catppuccin terminal palette, so PS1 and ANSI cwd colors remain stable.
 
 - **Browser-generated PDFs and traces now stay inside Forge Mux's own data namespace.** Export paths previously still used the upstream `~/.wmux/exports` directory; they now resolve under `~/.fmux/exports`, with hermetic path-safety coverage.
 
