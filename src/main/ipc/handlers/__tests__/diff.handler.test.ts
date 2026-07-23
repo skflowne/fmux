@@ -367,7 +367,14 @@ describe('diff:read — F3 symlink untracked is unsupported (blocks out-of-repo 
   it('symlink not synthesized, returned with unsupported label', async () => {
     // Create symlink pointing outside worktree as untracked.
     const outside = join(scn.repoRoot, 'a.txt'); // real path outside repo (main repo).
-    symlinkSync(outside, join(scn.worktreePath, 'link.txt'));
+    try {
+      symlinkSync(outside, join(scn.worktreePath, 'link.txt'));
+    } catch (error) {
+      // Windows requires Developer Mode or SeCreateSymbolicLinkPrivilege.
+      // An environment without either cannot exercise this filesystem case.
+      if ((error as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw error;
+    }
     const read = captured.get(IPC.DIFF_READ)!;
     const res = (await read({}, scn.worktreePath, scn.targetHeadOid)) as {
       ok: boolean;
