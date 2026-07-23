@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Terminal content now stays inside the visible pane at fractional display scaling.** The terminal surface clips xterm's sub-pixel canvas and viewport rounding instead of letting the last row extend slightly below the pane.
+
 - **Amber and Forge now render as visibly distinct themes.** Forge's first-paint defaults previously matched every `:root`, overriding the earlier Amber block even when `data-theme="amber"` was explicitly selected. The fallback now applies only before any theme attribute is present.
 
 - **Copying an upstream wmux config into Forge Mux no longer makes the Forge daemon collide with the running wmux daemon.** Recognized generated pipe names are rewritten to Forge's product- and instance-isolated default while genuinely custom pipe names remain untouched.
