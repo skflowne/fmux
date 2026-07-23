@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Amber and Forge now render as visibly distinct themes.** Forge's first-paint defaults previously matched every `:root`, overriding the earlier Amber block even when `data-theme="amber"` was explicitly selected. The fallback now applies only before any theme attribute is present.
+
 - **Copying an upstream wmux config into Forge Mux no longer makes the Forge daemon collide with the running wmux daemon.** Recognized generated pipe names are rewritten to Forge's product- and instance-isolated default while genuinely custom pipe names remain untouched.
 
 - **Recovered WSL Bash panes keep their colored PS1 across daemon or app restarts.** The injected shell now explicitly propagates `TERM=xterm-256color` into WSL when no terminal type was supplied, matching the actual xterm frontend so stock `.bashrc` color detection does not collapse every theme to a plain prompt.
