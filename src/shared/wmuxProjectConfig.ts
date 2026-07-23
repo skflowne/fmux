@@ -23,7 +23,7 @@
 import { WORKSPACE_PROFILE_COMMAND_MAX, WORKSPACE_PROFILE_STARTUP_CWD_MAX } from './types';
 
 /** File name probed for at/above a workspace's cwd (stops at the repo root). */
-export const WMUX_PROJECT_CONFIG_FILENAME = 'wmux.json';
+export const WMUX_PROJECT_CONFIG_FILENAME = 'fmux.json';
 
 // ── Validation caps ──────────────────────────────────────────────────────────
 export const PROJECT_CONFIG_MAX_COMMANDS = 16;
