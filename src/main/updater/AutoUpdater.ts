@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import { IPC } from '../../shared/constants';
 import { isAllowedDownloadUrl, digestsEqual, validateManifest, type UpdateManifest } from './verifyUpdate';
 
-const REPO = 'openwong2kim/wmux';
+const REPO = 'skflowne/fmux';
 const UPDATE_SERVER = `https://update.electronjs.org/${REPO}/win32/${app.getVersion()}`;
 // CI publishes update-manifest.json (version + setupExe + sha256 + url) as a
 // release asset; the "latest" alias always points at the newest release. The
@@ -285,7 +285,7 @@ export class AutoUpdater {
         reject(new Error(`download url not allowed: ${manifest.url}`));
         return;
       }
-      const dest = join(app.getPath('temp'), `wmux-update-${manifest.version}-${process.pid}.Setup.exe`);
+      const dest = join(app.getPath('temp'), `fmux-update-${manifest.version}-${process.pid}.Setup.exe`);
       const hash = createHash('sha256');
       const out = createWriteStream(dest);
       let settled = false;
