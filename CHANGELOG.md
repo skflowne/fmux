@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Recovered WSL Bash panes keep their colored PS1 across daemon or app restarts.** The injected shell now explicitly propagates `TERM=xterm-256color` into WSL when no terminal type was supplied, matching the actual xterm frontend so stock `.bashrc` color detection does not collapse every theme to a plain prompt.
+
 - **Void and Monochrome keep their colorless application chrome without erasing terminal meaning.** ANSI prompt segments, diffs, diagnostics, and status indications now retain distinct green, red, yellow, blue, magenta, and cyan colors.
 
 - **Browser-generated PDFs and traces now stay inside Forge Mux's own data namespace.** Export paths previously still used the upstream `~/.wmux/exports` directory; they now resolve under `~/.fmux/exports`, with hermetic path-safety coverage.
