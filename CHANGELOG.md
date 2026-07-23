@@ -1,11 +1,18 @@
 # Changelog
 
-All notable changes to wmux are documented in this file.
+All notable changes to Forge Mux are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [1.0.0] — 2026-07-23
+
+Initial Forge Mux release, based on upstream wmux 3.31.0. Forge Mux uses its
+own `fmux` package, CLI, installer, application identifiers, data directories,
+IPC endpoints, updater channel, and integration destinations so it can coexist
+with wmux while continuing to import upstream improvements.
 
 ### Fixed
 
@@ -69,6 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A crashed or Task-Manager-killed GUI no longer pins its terminal sessions alive forever.** Sessions with a client attached are deliberately exempt from every reaper — a client is watching, so the shell is in use. But that exemption trusted the `attached` state to be truthful, and nothing enforced it: when the GUI died without a clean detach (a crash, a force-kill), its sessions stayed `attached` in the daemon indefinitely, immune to the TTL and keeping the daemon itself alive. The daemon now notices when an attached client's pipe dies without a detach and, after a 60 s grace window (which absorbs renderer reloads and transient reconnects), demotes the session to `detached` so the normal 8 h detached TTL can age it out. (#557)
 
 - **Supervised/exec panes are never reaped by the detached TTL.** Reboot-survival supervised units are long-lived unattached sessions that can legitimately sit silent for hours; they're now exempt from the new detached TTL (on both load-time prune and the hourly reaper) so supervision keeps working. Reaping a detached session now also unlinks its leftover scrollback buffer dump, matching the dead-session path. (#557)
+
+---
+
+The entries below are inherited from upstream wmux and retained as project
+provenance.
 
 ## [3.31.0] — 2026-07-22
 
