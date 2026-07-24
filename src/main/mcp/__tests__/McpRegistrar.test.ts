@@ -63,7 +63,7 @@ describe('McpRegistrar.getStatus (multi-target)', () => {
   it('extracts registered script paths from Claude JSON', () => {
     const cfg = {
       mcpServers: {
-        wmux: { command: 'node', args: ['/abs/mcp-bundle/index.js'] },
+        fmux: { command: 'node', args: ['/abs/mcp-bundle/index.js'] },
         'someone-else': { command: 'node', args: ['/elsewhere/index.js'] },
       },
     };
@@ -75,11 +75,23 @@ describe('McpRegistrar.getStatus (multi-target)', () => {
     expect(claude.wmux).toEqual({ registered: true, path: '/abs/mcp-bundle/index.js' });
   });
 
+  it('does NOT treat an upstream-only mcpServers.wmux entry as Forge-registered', () => {
+    fs.writeFileSync(
+      claudeJson(),
+      JSON.stringify({
+        mcpServers: { wmux: { command: 'node', args: ['/abs/upstream-wmux.js'] } },
+      }),
+      'utf8',
+    );
+    const claude = target(new McpRegistrar().getStatus(), 'claude');
+    expect(claude.wmux).toEqual({ registered: false, path: null });
+  });
+
   it('extracts registered script paths from Codex TOML (mcp_servers table)', () => {
     fs.mkdirSync(path.dirname(codexToml()), { recursive: true });
     fs.writeFileSync(
       codexToml(),
-      `[mcp_servers.wmux]\ncommand = "node"\nargs = ["C:\\\\w\\\\index.js"]\n`,
+      `[mcp_servers.fmux]\ncommand = "node"\nargs = ["C:\\\\w\\\\index.js"]\n`,
       'utf8',
     );
     const codex = target(new McpRegistrar().getStatus(), 'codex');
@@ -91,7 +103,7 @@ describe('McpRegistrar.getStatus (multi-target)', () => {
   it('treats malformed entries / corrupt configs as not registered (no throw)', () => {
     fs.writeFileSync(
       claudeJson(),
-      JSON.stringify({ mcpServers: { wmux: { command: 'node' }, 'wmux-a2a': { command: 'node', args: [] } } }),
+      JSON.stringify({ mcpServers: { fmux: { command: 'node' }, 'wmux-a2a': { command: 'node', args: [] } } }),
       'utf8',
     );
     fs.mkdirSync(path.dirname(codexToml()), { recursive: true });
@@ -112,11 +124,12 @@ describe('McpRegistrar.getStatus (multi-target)', () => {
 });
 
 describe('McpRegistrar.forceUnregister (multi-target)', () => {
-  it('removes the wmux key from both Claude JSON and Codex TOML, leaving foreign intact', () => {
+  it('removes the fmux key only — leaves a co-installed upstream wmux key intact', () => {
     fs.writeFileSync(
       claudeJson(),
       JSON.stringify({
         mcpServers: {
+          fmux: { command: 'node', args: ['/x/fmux.js'] },
           wmux: { command: 'node', args: ['/x/wmux.js'] },
           'someone-else': { command: 'node', args: ['/y/other.js'] },
         },
@@ -127,7 +140,7 @@ describe('McpRegistrar.forceUnregister (multi-target)', () => {
     fs.mkdirSync(path.dirname(codexToml()), { recursive: true });
     fs.writeFileSync(
       codexToml(),
-      `# comment\n[projects.'d:\\wmux']\ntrust_level = "trusted"\n\n[mcp_servers.wmux]\ncommand = "node"\nargs = ["C:\\\\w\\\\i.js"]\n`,
+      `# comment\n[projects.'d:\\wmux']\ntrust_level = "trusted"\n\n[mcp_servers.fmux]\ncommand = "node"\nargs = ["C:\\\\f\\\\i.js"]\n\n[mcp_servers.wmux]\ncommand = "node"\nargs = ["C:\\\\w\\\\i.js"]\n`,
       'utf8',
     );
 
@@ -136,11 +149,15 @@ describe('McpRegistrar.forceUnregister (multi-target)', () => {
     const claudeAfter = JSON.parse(fs.readFileSync(claudeJson(), 'utf8')) as {
       mcpServers?: Record<string, unknown>; otherTopLevel?: unknown;
     };
-    expect(claudeAfter.mcpServers).toEqual({ 'someone-else': { command: 'node', args: ['/y/other.js'] } });
+    expect(claudeAfter.mcpServers).toEqual({
+      wmux: { command: 'node', args: ['/x/wmux.js'] },
+      'someone-else': { command: 'node', args: ['/y/other.js'] },
+    });
     expect(claudeAfter.otherTopLevel).toEqual({ keep: true });
 
     const codexAfter = fs.readFileSync(codexToml(), 'utf8');
-    expect(codexAfter).not.toContain('[mcp_servers.wmux]');
+    expect(codexAfter).not.toContain('[mcp_servers.fmux]');
+    expect(codexAfter).toContain('[mcp_servers.wmux]');
     // Foreign comment + backslash-key project table preserved byte-stable.
     expect(codexAfter).toContain('# comment');
     expect(codexAfter).toContain(`[projects.'d:\\wmux']`);
@@ -158,11 +175,11 @@ describe('McpRegistrar.unregister (legacy no-op)', () => {
   it('does NOT remove keys (preserves the chicken-and-egg fix)', () => {
     fs.writeFileSync(
       claudeJson(),
-      JSON.stringify({ mcpServers: { wmux: { command: 'node', args: ['/x/wmux.js'] } } }),
+      JSON.stringify({ mcpServers: { fmux: { command: 'node', args: ['/x/fmux.js'] } } }),
       'utf8',
     );
     new McpRegistrar().unregister();
     const after = JSON.parse(fs.readFileSync(claudeJson(), 'utf8')) as { mcpServers?: Record<string, unknown> };
-    expect(after.mcpServers?.wmux).toBeDefined();
+    expect(after.mcpServers?.fmux).toBeDefined();
   });
 });
