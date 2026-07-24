@@ -1,4 +1,5 @@
 import type { Pane, PaneLeaf, Workspace } from '../../shared/types';
+import { PRODUCT_NAME } from '../../shared/productIdentity';
 
 // MIME types for drag-and-drop payloads.
 // External AI chats (Claude Desktop, ChatGPT, Cursor) read text/plain.
@@ -58,7 +59,7 @@ function renderSurfaceLines(
       out.push(`   - Surface ID: ${s.id}`);
       if (s.browserUrl) out.push(`   - URL: ${s.browserUrl}`);
     } else if (surfaceType === 'diff') {
-      // J2 — diff 서피스는 PTY 없음. taskId만 표시(PTY ID 오표기 방지).
+      // J2 — diff surfaces have no PTY. Show taskId only (avoids mislabeling a PTY ID).
       out.push(`${idx}. ${activeTag}Diff`);
       out.push(`   - Surface ID: ${s.id}`);
       if (s.diffTaskId) out.push(`   - Task ID: ${s.diffTaskId}`);
@@ -84,7 +85,7 @@ export function buildWorkspaceMarkdown(ws: Workspace): string {
   const meta = ws.metadata;
 
   const lines: string[] = [
-    `# wmux Workspace: "${ws.name}"`,
+    `# ${PRODUCT_NAME} Workspace: "${ws.name}"`,
     `- Workspace ID: ${ws.id}`,
     '',
     '## Panes',
@@ -109,7 +110,7 @@ export function buildPaneMarkdown(ws: Workspace, paneId: string): string {
   const meta = ws.metadata;
 
   const lines: string[] = [
-    `# wmux Pane in "${ws.name}"`,
+    `# ${PRODUCT_NAME} Pane in "${ws.name}"`,
     `- Workspace ID: ${ws.id}`,
     `- Pane ID: ${paneId}`,
     '',

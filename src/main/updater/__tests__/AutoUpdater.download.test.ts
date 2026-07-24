@@ -9,7 +9,7 @@ import { IPC } from '../../../shared/constants';
 
 const FAKE_VERSION = '9.9.9';
 const NEW_VERSION = '9.9.10';
-const DL_URL = `https://github.com/openwong2kim/wmux/releases/download/v${NEW_VERSION}/wmux-${NEW_VERSION}.Setup.exe`;
+const DL_URL = `https://github.com/skflowne/fmux/releases/download/v${NEW_VERSION}/fmux-${NEW_VERSION}.Setup.exe`;
 const INSTALLER_BODY = Buffer.from('FAKE-INSTALLER-BYTES');
 const GOOD_SHA = createHash('sha256').update(INSTALLER_BODY).digest('hex');
 
@@ -45,7 +45,7 @@ async function loadWin32({ sha = GOOD_SHA }: { sha?: string } = {}) {
           if (url.includes('update.electronjs.org')) {
             respondJson(cbs, { name: feed.version, notes: 'notes', url: DL_URL });
           } else if (url.includes('update-manifest.json')) {
-            respondJson(cbs, { version: feed.version, setupExe: `wmux-${feed.version}.Setup.exe`, sha256: sha, url: DL_URL });
+            respondJson(cbs, { version: feed.version, setupExe: `fmux-${feed.version}.Setup.exe`, sha256: sha, url: DL_URL });
           } else {
             respondBody(cbs, INSTALLER_BODY);
           }
@@ -170,7 +170,7 @@ describe('AutoUpdater two-step flow (win32)', () => {
     await until(() => openPath.mock.calls.length > 0);
 
     expect(openPath).toHaveBeenCalledTimes(1);
-    expect(openPath.mock.calls[0][0]).toContain('wmux-update-');
+    expect(openPath.mock.calls[0][0]).toContain('fmux-update-');
     expect(quit).toHaveBeenCalledTimes(1);
   });
 
@@ -188,7 +188,7 @@ describe('AutoUpdater two-step flow (win32)', () => {
 
     // Launched the local installer, and made NO new network request.
     expect(openPath).toHaveBeenCalledTimes(1);
-    expect(openPath.mock.calls[0][0]).toContain('wmux-update-');
+    expect(openPath.mock.calls[0][0]).toContain('fmux-update-');
     expect(requestUrls.length).toBe(urlsAfterDownload);
     // #502: quit after launch so Squirrel installs against a dead instance.
     expect(quit).toHaveBeenCalledTimes(1);
@@ -298,7 +298,7 @@ describe('AutoUpdater two-step flow (win32)', () => {
     // The sha-mismatched download must be unlinked — both by the stream's
     // fail-path cleanup and the caller's catch (idempotent best-effort).
     expect(unlinkMock).toHaveBeenCalled();
-    expect(String(unlinkMock.mock.calls[0][0])).toContain('wmux-update-');
+    expect(String(unlinkMock.mock.calls[0][0])).toContain('fmux-update-');
   });
 
   it('a newer release supersedes a downloaded one: old artifact unlinked, new one downloaded', async () => {
@@ -319,7 +319,7 @@ describe('AutoUpdater two-step flow (win32)', () => {
 
     // The stale 9.9.10 artifact is deleted (not left to pile up in temp) and
     // the new version goes through the full download+verify cycle again.
-    expect(unlinkMock.mock.calls.some((c) => String(c[0]).includes(`wmux-update-${NEW_VERSION}`))).toBe(true);
+    expect(unlinkMock.mock.calls.some((c) => String(c[0]).includes(`fmux-update-${NEW_VERSION}`))).toBe(true);
     const downloadsAfter = sent.filter((s) => s.channel === IPC.UPDATE_AVAILABLE && s.data.status === 'downloaded').length;
     expect(downloadsAfter).toBe(downloadsBefore + 1);
   });

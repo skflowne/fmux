@@ -3,7 +3,7 @@
 // Bug: the palette's "Company: …" commands set `sidebarMode = 'company'`, but
 // NOTHING in the renderer read `sidebarMode` to swap the sidebar content — the
 // `CompanyPanel` component was never rendered (orphaned). So company commands
-// mutated state with no visible effect ("보이는데 눌러도 무반응").
+// mutated state with no visible effect ("looks clickable but does nothing").
 //
 // The store-connected <Sidebar /> can't be behavior-tested in this repo's
 // node-env harness (renderToStaticMarkup doesn't run effects, and the store
@@ -38,7 +38,7 @@ describe('Sidebar — company mode wiring (regression guard)', () => {
   });
 
   // NOTE: the Workspaces⇄Company sidebar toggle (data-company-toggle) was
-  // intentionally removed in the titlebar refactor (1bbf3f8) — the WMUX wordmark
+  // intentionally removed in the titlebar refactor (1bbf3f8) — the FMUX wordmark
   // and workspace button took that spot. Company mode is a held/paid track, so
   // its entry stays in the command palette rather than a sidebar affordance;
   // this guard therefore no longer asserts a sidebar toggle. The rendering

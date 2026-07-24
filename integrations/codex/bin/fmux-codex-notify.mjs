@@ -11,10 +11,10 @@
 // This script:
 //   1. Parses the LAST argv as the Codex notify JSON payload.
 //   2. Builds the canonical AgentSignal envelope (agent:'codex', kind:'agent.stop').
-//   3. Sends the envelope to the first wmux endpoint that answers: the DAEMON
-//      control pipe (`daemon.hooks.signal`, token ~/.wmux/daemon-auth-token —
+//   3. Sends the envelope to the first Forge Mux endpoint that answers: the DAEMON
+//      control pipe (`daemon.hooks.signal`, token ~/.fmux/daemon-auth-token —
 //      the always-on process, so this still lands with the GUI closed), else
-//      the MAIN pipe (`hooks.signal`, token ~/.wmux-auth-token). Either side
+//      the MAIN pipe (`hooks.signal`, token ~/.fmux-auth-token). Either side
 //      builds the resume binding from signal.agent + agentSessionId + cwd +
 //      transcript_path; both paths are fully agent-agnostic.
 //      WMUX_HOOKS_TO_MAIN=1 forces main-only.
@@ -49,32 +49,32 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function getAuthTokenPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  return join(home, '.wmux-auth-token');
+  return join(home, '.fmux-auth-token');
 }
 
 function getPipeName() {
   // WMUX_PIPE_NAME override: for the isolated capture probe
   // (scripts/codex-resume-capture-probe.mjs) and advanced multi-instance setups.
   // Not a security widening — a same-user process can already read the auth
-  // token from ~/.wmux-auth-token, so redirecting the pipe grants nothing new.
+  // token from ~/.fmux-auth-token, so redirecting the pipe grants nothing new.
   const override = process.env.WMUX_PIPE_NAME;
   if (typeof override === 'string' && override.length > 0) return override;
   if (process.platform === 'win32') {
     const username = userInfo().username || 'default';
-    return `\\\\.\\pipe\\wmux-${username}`;
+    return `\\\\.\\pipe\\fmux-${username}`;
   }
-  return join(homedir() || '/tmp', '.wmux.sock');
+  return join(homedir() || '/tmp', '.fmux.sock');
 }
 
 // ----- Daemon endpoint (M1: hook ingest lives in the daemon) ---------------
 //
 // The daemon is the always-on process and owns hook ingest, so it is tried
 // first; the main pipe stays as the fallback for an older wmux or a daemon that
-// is down. Same ~/.wmux (no data-suffix) limitation as the log path — the pane
+// is down. Same ~/.fmux (no data-suffix) limitation as the log path — the pane
 // env strips WMUX_DATA_SUFFIX, so a dev-suffix daemon is unreachable here.
 function getDaemonAuthTokenPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  return join(home, '.wmux', 'daemon-auth-token');
+  return join(home, '.fmux', 'daemon-auth-token');
 }
 
 // Prefer the `daemon-pipe` hint file the daemon writes at boot (the name it
@@ -83,16 +83,16 @@ function getDaemonAuthTokenPath() {
 function getDaemonPipeName() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
   try {
-    const fromFile = readFileSync(join(home, '.wmux', 'daemon-pipe'), 'utf8').trim();
+    const fromFile = readFileSync(join(home, '.fmux', 'daemon-pipe'), 'utf8').trim();
     if (fromFile) return fromFile;
   } catch {
     // Hint file absent/unreadable — fall through to the derived name.
   }
   if (process.platform === 'win32') {
     const username = userInfo().username || 'default';
-    return `\\\\.\\pipe\\wmux-daemon-${username}`;
+    return `\\\\.\\pipe\\fmux-daemon-${username}`;
   }
-  return join(home, '.wmux', 'daemon.sock');
+  return join(home, '.fmux', 'daemon.sock');
 }
 
 function readTokenFile(tokenPath) {
@@ -129,7 +129,7 @@ function resolveTargets() {
 
 function getLogPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  const dir = join(home, '.wmux');
+  const dir = join(home, '.fmux');
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch { /* appendFileSync below also fails → swallowed */ }
@@ -153,11 +153,11 @@ function logEvent(outcome, extra) {
 //
 // Same record shape + ptyId key + atomic temp→rename + don't-replace-newer rule
 // the daemon ingest expects (mirrors integrations/claude/bin/wmux-bridge.mjs).
-// Path matches the bridge convention (~/.wmux, no data-suffix — a reserved
+// Path matches the bridge convention (~/.fmux, no data-suffix — a reserved
 // WMUX_* var the pane env strips).
 function getResumeSpoolDir() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  const dir = join(home, '.wmux', 'resume-spool');
+  const dir = join(home, '.fmux', 'resume-spool');
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch { /* writeFileSync below throws + is swallowed */ }

@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    wmux installer for Windows
+    Forge Mux (fmux) installer for Windows
 .DESCRIPTION
-    Downloads and runs the prebuilt wmux Setup.exe from the latest GitHub
+    Downloads and runs the prebuilt fmux Setup.exe from the latest GitHub
     Release, verifying its SHA-256 against the published update-manifest.json
     before launching it.
 
@@ -11,9 +11,9 @@
       - one-liner:  $env:WMUX_FROM_SOURCE=1; irm <url>/install.ps1 | iex
       - file:       pwsh -File install.ps1 -FromSource
 .EXAMPLE
-    irm https://raw.githubusercontent.com/openwong2kim/wmux/main/install.ps1 | iex
+    irm https://raw.githubusercontent.com/skflowne/fmux/main/install.ps1 | iex
 .EXAMPLE
-    $env:WMUX_FROM_SOURCE=1; irm https://raw.githubusercontent.com/openwong2kim/wmux/main/install.ps1 | iex
+    $env:WMUX_FROM_SOURCE=1; irm https://raw.githubusercontent.com/skflowne/fmux/main/install.ps1 | iex
 #>
 param([switch]$FromSource)
 
@@ -145,8 +145,8 @@ function ConvertFrom-JsonSafe {
 # Configuration
 # ---------------------------------------------------------------------------
 
-$repo = 'openwong2kim/wmux'
-$installDir = "$env:LOCALAPPDATA\wmux"
+$repo = 'skflowne/fmux'
+$installDir = "$env:LOCALAPPDATA\fmux"
 
 if (-not $env:LOCALAPPDATA -or -not $installDir) {
     Write-Host "  [!] Cannot determine install directory (LOCALAPPDATA is not set)" -ForegroundColor Red
@@ -154,7 +154,7 @@ if (-not $env:LOCALAPPDATA -or -not $installDir) {
 }
 
 Write-Host ""
-Write-Host "  wmux installer" -ForegroundColor Cyan
+Write-Host "  Forge Mux installer" -ForegroundColor Cyan
 Write-Host "  AI Agent Terminal for Windows" -ForegroundColor DarkGray
 if ($FromSource) { Write-Host "  (build-from-source mode)" -ForegroundColor DarkGray }
 Write-Host ""
@@ -211,11 +211,11 @@ if (-not $FromSource) {
     }
 
     Write-Host "  [1/3] Downloading $($setupAsset.name)..." -ForegroundColor DarkGray
-    $tempExe = Join-Path $env:TEMP "wmux-$($version.TrimStart('v')).Setup.exe"
+    $tempExe = Join-Path $env:TEMP "fmux-$($version.TrimStart('v')).Setup.exe"
     $ProgressPreference = 'SilentlyContinue'  # massively speeds up Invoke-WebRequest
     try {
         Invoke-WebRequest -Uri $setupAsset.browser_download_url -OutFile $tempExe `
-            -Headers @{ 'User-Agent' = 'wmux-installer' } -TimeoutSec 300
+            -Headers @{ 'User-Agent' = 'fmux-installer' } -TimeoutSec 300
     } catch {
         Write-Host "  [!] Download failed: $($_.Exception.Message)" -ForegroundColor Red
         return
@@ -268,7 +268,7 @@ if (-not $FromSource) {
     Write-Host "  (SAC) may be enforcing on this device. Check with:" -ForegroundColor DarkGray
     Write-Host "      Get-MpComputerStatus | Select-Object SmartAppControlState" -ForegroundColor DarkGray
     Write-Host "  SAC blocks can be transient (cloud reputation) — retry later, or install" -ForegroundColor DarkGray
-    Write-Host "  via winget/Chocolatey. Details: github.com/openwong2kim/wmux/issues/200" -ForegroundColor DarkGray
+    Write-Host "  via winget/Chocolatey. Details: github.com/skflowne/fmux/issues/200" -ForegroundColor DarkGray
     Write-Host ""
     return
 }
@@ -444,7 +444,7 @@ if (Test-Path $installDir) {
             Remove-Item -Recurse -Force $installDir -ErrorAction Stop
         } catch {
             Write-Host "  [!] Cannot remove existing install: $_" -ForegroundColor Red
-            Write-Host "       Close wmux and any terminals using $installDir, then re-run." -ForegroundColor Red
+            Write-Host "       Close Forge Mux (fmux) and any terminals using $installDir, then re-run." -ForegroundColor Red
             return
         }
     }
@@ -495,15 +495,41 @@ try {
         }
         # Create a .cmd wrapper
         $nodePath = (Get-Command node).Source
-        $wmuxCmd = "$installDir\wmux.cmd"
-        Set-Content -Path $wmuxCmd -Value "@echo off`r`n`"$nodePath`" `"$cliEntry`" %*" -Encoding ASCII
-        # Add to user PATH persistently (exact match, not substring)
-        $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-        $pathEntries = if ($userPath) { $userPath.Split(';') } else { @() }
-        if ($installDir -notin $pathEntries) {
-            [Environment]::SetEnvironmentVariable('Path', "$installDir;$userPath", 'User')
-            $env:Path = "$installDir;$env:Path"
-            Write-Host "  [*] Added $installDir to user PATH" -ForegroundColor Green
+        $fmuxCmd = "$installDir\fmux.cmd"
+        Set-Content -Path $fmuxCmd -Value "@echo off`r`n`"$nodePath`" `"$cliEntry`" %*" -Encoding ASCII
+        # Add to user PATH persistently (exact match, not substring).
+        # Read/write REG_EXPAND_SZ via the registry so %VAR% tokens in other
+        # Path entries (including a co-installed wmux bin dir) are not demoted
+        # the way [Environment]::SetEnvironmentVariable would. Broadcast
+        # WM_SETTINGCHANGE so new shells pick up the change without relogin
+        # (same contract as src/main/cliShim.ts).
+        $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+        try {
+            $userPath = [string]$envKey.GetValue(
+                'Path',
+                '',
+                [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+            )
+            $installNorm = $installDir.TrimEnd('\', '/')
+            $pathEntries = if ($userPath) {
+                @($userPath.Split(';') | Where-Object { $_.Trim().Length -gt 0 })
+            } else {
+                @()
+            }
+            $already = [bool]($pathEntries | Where-Object { $_.TrimEnd('\', '/') -eq $installNorm })
+            if (-not $already) {
+                $newParts = @($installNorm) + $pathEntries
+                $newPath = $newParts -join ';'
+                Set-ItemProperty -Path 'HKCU:\Environment' -Name 'Path' -Value $newPath -Type ExpandString
+                $sig = '[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)] public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);'
+                $w = Add-Type -MemberDefinition $sig -Name 'Win32SendMessageTimeout' -Namespace 'FmuxInstall' -PassThru
+                [System.UIntPtr]$res = [System.UIntPtr]::Zero
+                $null = $w::SendMessageTimeout([System.IntPtr]0xffff, 0x1A, [System.UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$res)
+                $env:Path = "$installNorm;$env:Path"
+                Write-Host "  [*] Added $installDir to user PATH" -ForegroundColor Green
+            }
+        } finally {
+            if ($envKey) { $envKey.Close() }
         }
     }
 } finally {
@@ -518,11 +544,11 @@ Write-Host "  [3/5] Dependencies installed" -ForegroundColor Green
 
 Write-Host "  [5/5] Verifying installation..." -ForegroundColor DarkGray
 
-$wmuxPath = (Get-Command wmux -ErrorAction SilentlyContinue).Source
-if ($wmuxPath) {
-    Write-Host "  [5/5] wmux CLI available at: $wmuxPath" -ForegroundColor Green
+$fmuxPath = (Get-Command fmux -ErrorAction SilentlyContinue).Source
+if ($fmuxPath) {
+    Write-Host "  [5/5] fmux CLI available at: $fmuxPath" -ForegroundColor Green
 } else {
-    Write-Host "  [5/5] CLI linked (restart terminal to use 'wmux' command)" -ForegroundColor Yellow
+    Write-Host "  [5/5] CLI linked (restart terminal to use 'fmux' command)" -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------------------
@@ -545,5 +571,5 @@ Write-Host ""
 Write-Host "  Installation complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Usage:" -ForegroundColor Cyan
-Write-Host "    wmux --help            # CLI help" -ForegroundColor White
+Write-Host "    fmux --help            # CLI help" -ForegroundColor White
 Write-Host ""

@@ -25,7 +25,7 @@ process.on('uncaughtException', (err) => {
 import { markBoot, emitBootSummary } from './util/bootTrace';
 import * as crypto from 'crypto';
 import * as path from 'path';
-import { app, BrowserWindow, dialog, ipcMain, powerMonitor } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, powerMonitor, powerSaveBlocker } from 'electron';
 import { checkUserDataIsolation } from './dataIsolation';
 import { createWindow, loadMainRenderer } from './window/createWindow';
 import { PTYManager } from './pty/PTYManager';
@@ -49,6 +49,7 @@ import { UsagePoller } from './claude/UsagePoller';
 import { AccountUsageService } from './account/AccountUsageService';
 import { getAccountStore } from './account/accountStore';
 import { IPC, getWmuxHomeDir } from '../shared/constants';
+import { PRODUCT_NAME, PRODUCT_REPO_URL } from '../shared/productIdentity';
 import { HookSignalRouter } from './hooks/HookSignalRouter';
 import { SignalLatencyMeter } from './hooks/SignalLatencyMeter';
 import { registerBrowserRpc } from './pipe/handlers/browser.rpc';
@@ -118,6 +119,8 @@ import { eventBus } from './events/EventBus';
 import { broadcastMetadataUpdate } from './ipc/handlers/metadata.handler';
 import { readOrchRole } from '../shared/orchestratorRole';
 import { initLogSink, logLine } from './util/logSink';
+import { ActiveWorkPowerBlocker } from './power/ActiveWorkPowerBlocker';
+import { DaemonActiveWorkTracker } from './power/DaemonActiveWorkTracker';
 
 markBoot('imports-done');
 
@@ -179,7 +182,7 @@ if (process.platform === 'win32') {
       try {
         const killed = terminateRunningAppInstances();
         if (killed.length > 0) {
-          console.log(`[Squirrel] terminated running wmux instance(s) before install work: ${killed.join(', ')}`);
+          console.log(`[Squirrel] terminated running Forge Mux instance(s) before install work: ${killed.join(', ')}`);
         }
       } catch { /* best-effort */ }
     }
@@ -250,12 +253,21 @@ markBoot('module-eval-end');
 
 function appInit(): void {
 
-// 인스턴스 격리: dev 빌드(!app.isPackaged)는 packaged 빌드 및 다른 체크아웃의
-// 빌드와 SingletonLock·userData·소켓·~/.wmux를 공유해 충돌한다(둘 다 productName
-// "wmux"). dev일 때 WMUX_DATA_SUFFIX='-dev'를 박아 모든 경로(소켓/토큰/데몬/홈)를
-// 격리하고, userData도 분리한다. daemon은 spawn 시 이 env를 상속받아 같은 suffix
-// 경로를 쓴다. packaged 기본은 suffix 빈 문자열이라 기존 경로와 100% 동일.
-// setPath('userData')는 app ready 전에 호출해야 효력이 있으므로 lock 체크보다 먼저 둔다.
+// Pin the application name to the display name, independent of how the build
+// is packaged. The packaged artifacts live under the `fmux` slug (no space in
+// the out dir / .app bundle name), but app.getName() is what userData —
+// %APPDATA%\Forge Mux, ~/Library/Application Support/Forge Mux — is derived
+// from, and it is also the name shown in dialogs and the macOS menu bar. Set it
+// BEFORE the first getPath('userData') below so the data dir can never drift
+// with a packaging rename.
+app.setName(PRODUCT_NAME);
+
+// Instance isolation: dev builds (!app.isPackaged) share SingletonLock, userData, socket,
+// and ~/.wmux with packaged builds and other checkouts (both productName "wmux"), causing
+// collisions. In dev, pin WMUX_DATA_SUFFIX='-dev' to isolate all paths (socket/token/daemon/home)
+// and split userData. Daemon inherits this env on spawn and uses the same suffix paths.
+// Packaged default is empty suffix — 100% same paths as before.
+// setPath('userData') must run before app ready to take effect — placed before lock check.
 if (!app.isPackaged && !process.env.WMUX_DATA_SUFFIX) {
   process.env.WMUX_DATA_SUFFIX = '-dev';
 }
@@ -265,7 +277,7 @@ if (process.env.WMUX_DATA_SUFFIX) {
   try {
     app.setPath('userData', originalUserData + suffix);
   } catch (err) {
-    console.error('[Main] userData 격리 setPath 실패:', err);
+    console.error('[Main] userData isolation setPath failed:', err);
   }
   // Diagnostics + fail-loud: confirm the suffix actually landed in userData. If
   // setPath threw / no-op'd, userData stayed at the PRODUCTION dir and an
@@ -288,13 +300,13 @@ if (process.env.WMUX_DATA_SUFFIX) {
 // shortcut's AppUserModelID so the taskbar button groups/pins against it (and
 // Windows resolves the shortcut's icon for the button) instead of spawning a
 // second, ungrouped button under a process-derived ID. Squirrel sets the
-// shortcut AUMID to `com.squirrel.<package>.<exe>` = `com.squirrel.wmux.wmux`
+// shortcut AUMID to `com.squirrel.<package>.<exe>` = `com.squirrel.fmux.fmux`
 // (MakerSquirrel name 'wmux' + wmux.exe). Must run before any BrowserWindow.
 // Packaged-only: in dev there is no Squirrel-created shortcut whose AUMID
 // matches this id, so setting it unpackaged can muddle taskbar grouping. Gate
 // on app.isPackaged, mirroring the WMUX_DATA_SUFFIX dev/packaged split above.
 if (process.platform === 'win32' && app.isPackaged) {
-  app.setAppUserModelId('com.squirrel.wmux.wmux');
+  app.setAppUserModelId('com.squirrel.fmux.fmux');
 }
 
 let isQuitting = false;
@@ -330,12 +342,23 @@ if (!gotLock) {
 markBoot('construction-start');
 const ptyManager = new PTYManager();
 let mainWindow: BrowserWindow | null = null;
+const activeWorkPowerBlocker = new ActiveWorkPowerBlocker(
+  powerSaveBlocker,
+  process.platform === 'win32',
+  (message) => logLine('info', 'power', message),
+);
 // Forward-declared: PTYBridge captures this binding by reference and reads it
 // at runtime (after the actual HookSignalRouter is constructed further down
 // in this file). Lets the detector tee call `recordDetector` on emit without
 // reordering hook/router boot earlier than the PTY layer.
 let hookSignalRouter: HookSignalRouter | null = null;
-const ptyBridge = new PTYBridge(ptyManager, () => mainWindow, () => hookSignalRouter);
+const ptyBridge = new PTYBridge(
+  ptyManager,
+  () => mainWindow,
+  () => hookSignalRouter,
+  (ptyId, type) => activeWorkPowerBlocker.localPromptBoundary(ptyId, type),
+  (ptyId) => activeWorkPowerBlocker.localSessionEnded(ptyId),
+);
 const autoUpdater = new AutoUpdater(() => mainWindow);
 
 const rpcRouter = new RpcRouter();
@@ -361,9 +384,14 @@ const webviewCdpManager = new WebviewCdpManager(cdpPort);
 
 // Daemon client — initialized on app ready, used if daemon is available
 let daemonClient: DaemonClient | null = null;
+const DAEMON_POWER_RECONNECT_GRACE_MS = 60_000;
+const daemonActiveWorkTracker = new DaemonActiveWorkTracker(
+  activeWorkPowerBlocker,
+  (message) => logLine('warn', 'power', message),
+);
 
-// envelope PR4 C12: 워커 전이는 데몬 A2aTaskService(정본 로그)에 먼저 커밋된다 —
-// getter 주입이라 앱-레디 이후 연결되는 daemonClient를 자연 추적한다.
+// envelope PR4 C12: worker transitions commit to daemon A2aTaskService (canonical log) first —
+// getter injection naturally tracks daemonClient connected after app-ready.
 const claudeWorker = new ClaudeWorker(() => mainWindow, () => daemonClient);
 
 // Monotonic token guarding the async tray refresh. Bumped on every refresh
@@ -436,11 +464,11 @@ function markDaemonReady(): void {
 // live `daemonClient` value via closure, which means a renderer that
 // reloaded after a mid-session daemon disconnect still gets a truthful
 // answer instead of a cached stale one.
-// renderer가 agentStatus='running'을 받았는데 그 ptyId의 agentName이 아직
-// 비어 있을 때 호출한다(1회성 session:agent emit을 매핑 준비 전에 놓친 경우).
-// daemon AgentDetector를 직접 조회한다 — router 캐시(lastAgentNameByPty)는
-// session:agent emit 도착에 의존해 같은 race를 타므로 쓰지 않는다. daemon은
-// 배너를 직접 feed받아 lastAgent를 설정하므로 전파 race와 무관한 권위 소스다.
+// Called when renderer got agentStatus='running' but agentName for that ptyId is still
+// empty (one-shot session:agent emit missed before mapping was ready).
+// Queries daemon AgentDetector directly — router cache (lastAgentNameByPty) depends on
+// session:agent emit arrival and hits the same race, so not used. Daemon sets lastAgent
+// from banner feed directly — authoritative source independent of propagation race.
 ipcMain.handle('detection:resolveAgent', async (_e, ptyId: string) => {
   const id = typeof ptyId === 'string' ? ptyId : '';
   if (!id) return null;
@@ -546,7 +574,7 @@ function attachWindowRecovery(win: BrowserWindow): void {
     }
     lastCrashTime = now;
     if (crashCount >= 3) {
-      require('electron').dialog.showErrorBox('wmux', 'Renderer crashed repeatedly. Please restart.');
+      require('electron').dialog.showErrorBox(PRODUCT_NAME, 'Renderer crashed repeatedly. Please restart.');
       app.quit();
       return;
     }
@@ -628,13 +656,14 @@ registerProjectConfigHandlers();
 // handler fails a no-senderPtyId mutation closed, and this ipcMain.handle
 // channel is unreachable from the pipe. See channelLocal.handler.ts.
 registerChannelLocalHandlers(() => daemonClient);
-// J1 fan-out — 프롬프트 1개 → N 격리 태스크. 렌더러 다이얼로그가 fanout:start를
-// invoke하면 main의 FanOutService가 데몬 RPC + 렌더러 spawn을 조립한다(channelLocal과
-// 동일 renderer-trusted 신원, 파이프 미노출).
+// J1 fan-out — one prompt → N isolated tasks. Renderer dialog invokes fanout:start;
+// main FanOutService assembles daemon RPC + renderer spawn (same renderer-trusted
+// identity as channelLocal, pipe not exposed).
 registerFanOutHandler(() => daemonClient, () => mainWindow);
-// J3 태스크 수명주기 — close(remove→close 순서)·1클릭 PR(gh 4중 게이트)·정리 스캔
-// (디스크 정본)·미발사 재발사(prompt.md 읽기). 물질화 필드는 데몬 projection에서
-// 역참조하므로 렌더러는 taskId만 싣는다(단일 정본). 파이프 미노출(renderer-trusted).
+// J3 task lifecycle — close (remove→close order), one-click PR (gh 4-gate), cleanup scan
+// (disk canonical), unfired refire (read prompt.md). Materialization fields are reverse-
+// looked up from daemon projection so renderer sends taskId only (single source of truth).
+// Pipe not exposed (renderer-trusted).
 registerWorktaskHandlers(() => daemonClient);
 // Command Deck Phase 2 — the Commander brain. Renderer-only surface (same
 // process-boundary trust basis as channelLocal/fanout, pipe-unreachable): the
@@ -869,12 +898,11 @@ app.on('ready', async () => {
   logLine('info', 'main', 'app.on(ready) fired');
   console.log('[Main] App ready, creating window...');
 
-  // P3 — macOS CLI shim: DMG/ZIP 설치엔 Squirrel 훅이 없으므로 첫 실행 시 1회만
-  // `/usr/local/bin/wmux`(폴백 `~/.local/bin/wmux`) 심링크 설치를 시도한다.
-  // 마커 파일로 1회 게이트하되, 마커가 있어도 "우리 소유 심링크가 현재 번들을
-  // 안 가리키면"(DMG/ZIP 임시 경로에서 첫 설치 후 볼륨 제거·앱 이동으로 죽은
-  // 링크가 됨, issue #505) 복구를 위해 재실행한다. 부팅 경로를 막지 않게 지연
-  // 실행, 전체 best-effort.
+  // P3 — macOS CLI shim: DMG/ZIP installs have no Squirrel hook, so on first launch try once
+  // to install symlink at `/usr/local/bin/wmux` (fallback `~/.local/bin/wmux`).
+  // Marker file gates one attempt; even with marker, re-run if "our owned symlink does not
+  // point at current bundle" (dead link after volume eject/app move from DMG/ZIP temp path,
+  // issue #505). Deferred so boot path is not blocked; all best-effort.
   if (process.platform === 'darwin' && app.isPackaged) {
     const shimTimer = setTimeout(() => {
       try {
@@ -887,7 +915,7 @@ app.on('ready', async () => {
           console.log(`[cliShim] ${result.guidance}`);
           logLine('info', 'main', `darwin CLI shim guidance: ${result.guidance}`);
         }
-        // foreign(다른 설치가 제공 중)·성공·실패 모두 재시도하지 않는다 — 1회 시도.
+        // foreign (another install owns it), success, or failure — no retry; one attempt.
         fs.mkdirSync(getWmuxHomeDir(), { recursive: true });
         fs.writeFileSync(markerPath, new Date().toISOString(), 'utf8');
       } catch (err) {
@@ -932,15 +960,15 @@ app.on('ready', async () => {
     refreshTimer.unref();
   }
 
-  // Dev Dock 아이콘: dev에선 패키징 안 된 제네릭 Electron 바이너리로 실행돼
-  // macOS Dock에 기본 원자 아이콘이 뜬다. 패키지 빌드는 packagerConfig.icon으로
-  // 실제 아이콘이 박히지만 dev는 그게 없으므로, 개발 편의상 실제 아이콘으로 교체.
-  // packaged 빌드는 이미 올바른 아이콘이라 건드리지 않는다(!app.isPackaged 가드).
+  // Dev Dock icon: dev runs as unpackaged generic Electron binary, so macOS Dock shows
+  // default atom icon. Package build bakes real icon via packagerConfig.icon but dev
+  // lacks that — swap to real icon for dev convenience.
+  // Packaged build already has correct icon — untouched (!app.isPackaged guard).
   if (!app.isPackaged && process.platform === 'darwin') {
     try {
       app.dock?.setIcon(path.join(app.getAppPath(), 'assets', 'icon.png'));
     } catch (err) {
-      console.warn('[Main] dev Dock 아이콘 설정 실패(무시):', err);
+      console.warn('[Main] dev Dock icon setup failed (ignored):', err);
     }
   }
 
@@ -950,11 +978,11 @@ app.on('ready', async () => {
   // best-practice for downstream redistribution and complements the
   // bundled LICENSE / THIRD_PARTY_NOTICES files.
   app.setAboutPanelOptions({
-    applicationName: 'wmux',
+    applicationName: PRODUCT_NAME,
     applicationVersion: app.getVersion(),
     version: app.getVersion(),
     copyright: 'MIT License — see LICENSE in the install folder.',
-    website: 'https://github.com/openwong2kim/wmux',
+    website: PRODUCT_REPO_URL,
     iconPath: app.isPackaged
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '..', '..', 'assets', 'icon.png'),
@@ -969,7 +997,7 @@ app.on('ready', async () => {
   // originally motivated full serialization is now closed by the
   // get-ready-state resolver queue + paneGate instead of by ordering).
   // Plugin host (B-1): discover UI plugin bundles and serve them over
-  // wmux-plugin:// to sandboxed iframes. Registered before the window
+  // fmux-plugin:// to sandboxed iframes. Registered before the window
   // loads so panel iframes never race the protocol handler. Best-effort:
   // a broken plugins dir must never block app boot.
   try {
@@ -1083,6 +1111,7 @@ app.on('ready', async () => {
     onInstall: async (client) => {
       daemonClient = client;
       console.log('[Main] Connected to wmux-daemon (auth verified)');
+      await daemonActiveWorkTracker.attach(client);
       // Handler swap to daemon-routed mode. The microsecond window where
       // pty/* handlers are torn down and re-registered is the same
       // surface the original code used; the swap is logged for the
@@ -1152,6 +1181,11 @@ app.on('ready', async () => {
     },
     onUninstall: () => {
       console.warn('[Main] Daemon disconnected, falling back to local PTY');
+      // A named-pipe blip must not drop the execution-required request while
+      // the daemon and its PTYs are still alive. Reconnect hydration replaces
+      // this state; budget exhaustion releases it after a bounded grace.
+      daemonActiveWorkTracker.detach(false);
+      activeWorkPowerBlocker.beginDaemonReconnectGrace(DAEMON_POWER_RECONNECT_GRACE_MS);
       daemonNotificationRouter?.stop();
       daemonNotificationRouter = null;
       remoteInboxBridge?.stop();
@@ -1203,10 +1237,10 @@ app.on('ready', async () => {
         if (process.env.WMUX_NO_DIALOG !== '1') {
           const hint = event.lastError && event.lastError.length > 0
             ? event.lastError
-            : 'wmux could not bring the daemon back up after 5 retries.';
+            : 'Forge Mux could not bring the daemon back up after 5 retries.';
           dialog.showErrorBox(
-            'wmux daemon unavailable',
-            `${hint}\n\nwmux will keep running in local-only mode. To recover:\n  1. Quit wmux from the tray.\n  2. In an elevated PowerShell, run:  Get-Process | Where-Object { $_.Path -like '*wmux*' }\n  3. taskkill /F /PID <pid>  for any leftover daemon process.\n  4. Delete ~/.wmux/daemon.pid if it exists.\n  5. Re-launch wmux.`,
+            'Forge Mux daemon unavailable',
+            `${hint}\n\nForge Mux will keep running in local-only mode. To recover:\n  1. Quit Forge Mux from the tray.\n  2. In an elevated PowerShell, run:  Get-Process | Where-Object { $_.Path -like '*fmux*' }\n  3. taskkill /F /PID <pid>  for any leftover daemon process.\n  4. Delete ~/.fmux/daemon.pid if it exists.\n  5. Re-launch Forge Mux.`,
           );
         }
       }
@@ -1276,9 +1310,9 @@ app.on('ready', async () => {
   // fired during the bootstrap await (dev server not up yet, corrupt
   // packaged assets) would escape the auto-reload backoff entirely.
   //
-  // dev에서 Vite dev server가 아직 준비 전이거나(포트 점유로 5174 지연) 죽었을 때
-  // did-fail-load가 발생한다. 기존엔 2초 고정 간격으로 무한 reload해 콘솔을
-  // ERR_CONNECTION_REFUSED로 도배했다. 지수 백오프 + 재시도 상한으로 교체한다.
+  // In dev, did-fail-load when Vite dev server is not ready yet (port 5174 delayed) or dead.
+  // Old behavior: infinite reload every 2s flooding console with ERR_CONNECTION_REFUSED.
+  // Replaced with exponential backoff + retry cap.
   // Codex review catch: dispatchNotification's "window alive → send IPC"
   // path silently loses notifications whenever the window exists but its
   // content is mid-reload (crash recovery, did-fail-load retry, dev HMR) —
@@ -1293,12 +1327,12 @@ app.on('ready', async () => {
 
   let didFailLoadCount = 0;
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => {
-    // ERR_ABORTED(-3): 새 내비게이션이 이전 로드를 정상 취소한 경우 — 재시도 불필요.
+    // ERR_ABORTED(-3): new navigation normally cancelled previous load — no retry needed.
     if (errorCode === -3) return;
     console.error('[Main] Page failed to load:', errorCode, errorDescription);
     didFailLoadCount += 1;
     if (didFailLoadCount > 10) {
-      console.error('[Main] did-fail-load 10회 초과 — 자동 reload 중단. dev server(npm start)나 빌드 자산을 확인하세요.');
+      console.error('[Main] did-fail-load exceeded 10 times — auto reload stopped. Check dev server (npm start) or build assets.');
       return;
     }
     const delay = Math.min(500 * 2 ** (didFailLoadCount - 1), 30_000);
@@ -1307,7 +1341,7 @@ app.on('ready', async () => {
     }, delay);
   });
   mainWindow.webContents.on('did-finish-load', () => {
-    didFailLoadCount = 0; // 로드 성공 — 백오프 카운터 리셋
+    didFailLoadCount = 0; // Load succeeded — reset backoff counter
     console.log('[Main] Page loaded successfully');
   });
 
@@ -1598,12 +1632,12 @@ app.on('before-quit', async (e) => {
   // same visible behavior as the old per-agent child dying with wmux.
   mcpBrokerSupervisor.stop();
 
-  // macOS 로그아웃/재시작/종료 대응(P4): win32의 'session-end' flushSync와 동등한
-  // 동기 세션 flush. macOS는 WM_ENDSESSION 대신 Apple Event로 quit을 보내고
-  // 이 async 핸들러가 끝까지 못 돌 수 있으므로, 어떤 await보다도 먼저 pending
-  // debounced write를 동기로 밀어 넣는다(디스크는 이벤트 기반 sync save로 이미
-  // 최신 — 이 flush는 session-end 경로와 동일한 안전망). 이중 실행 가드는 위의
-  // `isQuitting` 게이트가 담당한다: 두 번째 pass는 이 지점에 도달하지 않는다.
+  // macOS logout/restart/shutdown (P4): synchronous session flush equivalent to win32
+  // 'session-end' flushSync. macOS sends quit via Apple Event instead of WM_ENDSESSION and
+  // this async handler may not finish, so push pending debounced writes synchronously before
+  // any await (disk already current via event-driven sync save — this flush is the same
+  // safety net as session-end). Double-run guard is `isQuitting` above: second pass never
+  // reaches here.
   if (process.platform === 'darwin') {
     try {
       sessionManager.flushSync();
@@ -1673,6 +1707,10 @@ app.on('before-quit', async (e) => {
   safeStep('daemonRespawnController.dispose', () => {
     daemonRespawnController?.dispose();
     daemonRespawnController = null;
+  });
+  safeStep('activeWorkPowerBlocker.dispose', () => {
+    daemonActiveWorkTracker.detach();
+    activeWorkPowerBlocker.dispose();
   });
 
   // tmux-style persistence (the entire reason the daemon exists): a normal
@@ -1862,12 +1900,10 @@ app.on('activate', () => {
     attachWindowRecovery(mainWindow);
     return;
   }
-  // macOS: 창을 닫아도 hide()만 하고 파괴하지 않으므로(위 close 인터셉트)
-  // getAllWindows()는 계속 0보다 크다 — Dock 아이콘 재클릭으로 숨겨진 창을
-  // 복귀시키는 mac 표준 관례가 이 분기 없이는 무반응이었다(owner-reported
-  // 2026-07-19). Windows/Linux는 트레이 컨텍스트 메뉴가 이미 이 경로를
-  // 담당하므로 이 핸들러는 mac에서만 의미 있지만, 숨겨진 창이 있으면
-  // 어느 OS에서든 보여주는 편이 안전하다.
+  // macOS: close only hide()s windows (see close intercept above), so getAllWindows()
+  // stays > 0 — without this branch, Dock re-click to restore hidden windows (mac convention)
+  // was unresponsive (owner-reported 2026-07-19). Windows/Linux tray menu already covers
+  // this path; handler matters most on mac but showing any hidden window on any OS is safer.
   const hidden = windows.find((w) => !w.isVisible());
   if (hidden) hidden.show();
 });

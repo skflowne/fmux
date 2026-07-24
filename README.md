@@ -1,24 +1,47 @@
 <div align="center">
 
-# wmux
+# Forge Mux
 
 ### The workspace multiplexer for AI coding agents.
 
 Run **fleets of Claude Code, Codex & Gemini in parallel** — each agent in its own pane, or fan one prompt out into **N isolated git worktrees** you review **hunk by hunk**. Native on **Windows & macOS**, with approval gates, agent-to-agent channels, and a **real browser your agents drive**. Walk away — after a crash or **full OS reboot**, they come back mid-conversation.
 
-<img width="924" alt="wmux — the workspace multiplexer for AI coding agents, on Windows and macOS" src="docs/banner.png" />
+<img width="924" alt="Forge Mux — the workspace multiplexer for AI coding agents, on Windows and macOS" src="docs/banner.png" />
 
-[![Website](https://img.shields.io/badge/wmux.app-E8A33D?label=&labelColor=151517)](https://www.wmux.app)
-[![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)](https://github.com/openwong2kim/wmux/releases/latest)
-[![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-000000?logo=apple&logoColor=white)](https://github.com/openwong2kim/wmux/releases/latest)
-[![Latest release](https://img.shields.io/github/v/release/openwong2kim/wmux?color=2ea44f&label=release)](https://github.com/openwong2kim/wmux/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/openwong2kim/wmux/total?color=blue&label=downloads)](https://github.com/openwong2kim/wmux/releases)
+[![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)](https://github.com/skflowne/fmux/releases/latest)
+[![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-000000?logo=apple&logoColor=white)](https://github.com/skflowne/fmux/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/skflowne/fmux?color=2ea44f&label=release)](https://github.com/skflowne/fmux/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/skflowne/fmux/total?color=blue&label=downloads)](https://github.com/skflowne/fmux/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/openwong2kim/wmux?style=social)](https://github.com/openwong2kim/wmux)
+[![Stars](https://img.shields.io/github/stars/skflowne/fmux?style=social)](https://github.com/skflowne/fmux)
 
 </div>
 
-> **What's a *workspace multiplexer*?** tmux splits a terminal. wmux multiplexes whole **workspaces** — terminals, agents, git worktrees, a browser, and the channels they coordinate over — all owned by a daemon that keeps them running across quits, crashes, and full reboots. **One window. One fleet. Windows & macOS.**
+> **What's a *workspace multiplexer*?** tmux splits a terminal. Forge Mux multiplexes whole **workspaces** — terminals, agents, git worktrees, a browser, and the channels they coordinate over — all owned by a daemon that keeps them running across quits, crashes, and full reboots. **One window. One fleet. Windows & macOS.**
+
+---
+
+## Fork maintenance
+
+Forge Mux preserves upstream wmux source structure so upstream updates remain
+reviewable and practical to rebase. Only user-facing and collision-facing
+boundaries use the `fmux` identity: installation and CLI names, release sources,
+application IDs, data directories, IPC endpoints, project config filenames, and
+integration destinations.
+
+Development happens on `develop`, rebased onto `origin/main` and verified. A
+release promotes that verified delta to `main` as one squash merge. The fmux
+identity layer is the range of fork-local commits above the upstream base
+(`git merge-base main origin/main`); to pull upstream changes, run
+`git fetch origin && git rebase origin/main main`, which replays the whole
+layer onto the new upstream tip.
+
+Forge Mux versioning restarts at 1.0.0, and this repository's `v*` tags mark
+Forge Mux releases only — wmux's historical release tags live in the upstream
+repository. Release tags are pushed individually (`git push fork vX.Y.Z`,
+never bare `git push --tags`), and clones set
+`git config remote.origin.tagOpt --no-tags` so upstream fetches don't
+re-import wmux tags.
 
 ---
 
@@ -73,27 +96,19 @@ Run **fleets of Claude Code, Codex & Gemini in parallel** — each agent in its 
 
 ## ⚡ Install in 30 seconds
 
-**Windows** — use a package manager (avoids the SmartScreen warning):
+**Windows** — one-liner (downloads the latest Setup.exe and verifies its SHA-256 before running it):
 
 ```powershell
-winget install openwong2kim.wmux
+irm https://raw.githubusercontent.com/skflowne/fmux/main/install.ps1 | iex
 ```
 
-<sub>or `choco install wmux` &nbsp;·&nbsp; [**download Setup.exe**](https://github.com/openwong2kim/wmux/releases/latest) for offline install — the installer is signed with a SignPath *test* certificate for now, so SmartScreen still shows an unknown publisher; winget/choco skip the prompt ([why?](#install-help))</sub>
+<sub>or [**download Setup.exe**](https://github.com/skflowne/fmux/releases/latest) directly — either way a SmartScreen prompt appears because the installer isn't Authenticode-signed yet ([why?](#install-help)). Once installed, Forge Mux keeps itself up to date via the in-app updater.</sub>
 
-**macOS** (Apple Silicon)
-
-<sub>[**Download the .dmg**](https://github.com/openwong2kim/wmux/releases/latest) — Developer ID signed, notarized and stapled, so it opens without a Gatekeeper detour — and drag wmux to Applications. On first launch the `wmux` CLI installs itself onto your PATH.</sub>
-
-<sub>Both platforms update themselves in place: wmux checks for a new release every 30 minutes and verifies the download against a published SHA-256 before installing (Windows x64 and macOS arm64).</sub>
-
-**Linux** — experimental AppImage / .deb / .rpm builds are on the [releases page](https://github.com/openwong2kim/wmux/releases/latest).
-
-<sub>Prefer a tour first? [**wmux.app**](https://www.wmux.app) walks through the same features with screenshots.</sub>
+**macOS / Linux** — prebuilt binaries aren't published yet; Forge Mux currently ships Windows installers only. Both platforms build and run from source (see [Build from source](#build-from-source)).
 
 ---
 
-## 🤔 Why wmux?
+## 🤔 Why Forge Mux?
 
 |   |   |
 |---|---|
@@ -104,8 +119,8 @@ winget install openwong2kim.wmux
 | 🌐 **Agents drive a *real* browser** | Built-in Chrome over CDP. Say *"search Google for this"* and your agent actually clicks, types, and screenshots. Works with React inputs and CJK text. |
 | 🧭 **Fleet View cockpit** | `Ctrl+Shift+A` — every agent across every workspace in an **always-on side panel** (other panes stay live), blocked ones floated to the top with a live activity line. Clear every stuck approval from one **inbox**; click any card to jump straight there. |
 | 🔔 **Knows when an agent finishes** | Desktop notification + taskbar flash on completion. Flags `rm -rf`, `git push --force`, `DROP TABLE` for your approval. |
-| 💾 **Survives quit, crash & reboot** | A tmux-style daemon owns every PTY. Reopen and your sessions are **still running — processes and all.** A pane declared in `wmux.json` is **supervised like an init system** — auto-restarted across crashes and reboots (the app relaunches at login), resuming the *exact* Claude conversation it was on. |
-| 🤖 **Zero-config MCP** | Launch wmux and Claude Code just works — **84 tools** (browser, terminal, panes, channels, A2A) register themselves, scoped to the workspace that called them. |
+| 💾 **Survives quit, crash & reboot** | A tmux-style daemon owns every PTY. Reopen and your sessions are **still running — processes and all.** A pane declared in `fmux.json` is **supervised like an init system** — auto-restarted across crashes and reboots (the app relaunches at login), resuming the *exact* Claude conversation it was on. |
+| 🤖 **Zero-config MCP** | Launch Forge Mux and Claude Code just works — **84 tools** (browser, terminal, panes, channels, A2A) register themselves, scoped to the workspace that called them. |
 
 ---
 
@@ -115,8 +130,8 @@ winget install openwong2kim.wmux
 - 🌿 **Git surface** — a **Git tab** in the dock: worktrees (create / open-as-workspace / remove, no force-delete) + **pull requests & comments** for the active repo (GitHub via `gh`, GitLab via `glab`, self-hosted included) · read-only **workspace diff** from the palette · **ask the orchestrator about a hunk** with the code attached
 - 🔁 **One-click loops** — put the orchestrator on an objective with optional per-iteration **steps** (a `/`-picker autocompletes your `.claude` skills), a done-when checklist, and a cadence; it keeps working across restarts, event-woken by your agents, and stopping fails closed to report-only
 - 🤝 **A2A multi-agent** — agents message + delegate tasks by pane, gated by a per-pane execute approval, with a pollable task inbox + symmetric reply
-- 💬 **Channels** — Slack-style rooms agents read, post, and get @-mentioned into · server-verified sender · durable per-agent inbox · `wmux channel` CLI · operators can self-join private agent rooms (audited)
-- 🤖 **Agent supervision** — declare a pane in `wmux.json` (trust-gated) and the daemon keeps it alive: restart policy, backoff, reboot survival
+- 💬 **Channels** — Slack-style rooms agents read, post, and get @-mentioned into · server-verified sender · durable per-agent inbox · `fmux channel` CLI · operators can self-join private agent rooms (audited)
+- 🤖 **Agent supervision** — declare a pane in `fmux.json` (trust-gated) and the daemon keeps it alive: restart policy, backoff, reboot survival
 - 🖥️ **Native PTY (ConPTY on Windows, forkpty on macOS) + xterm.js WebGL** rendering · 999K-line scrollback · Unicode 11 (correct CJK / emoji)
 - ⌨️ **Tmux-style prefix** (`Ctrl+B` + key, 13 actions) · **floating pane** (`` Ctrl+` ``) · scroll bookmarks
 - 🔀 **Multiview** — several workspaces side by side · layout templates · drag-to-reorder sidebar
@@ -124,9 +139,9 @@ winget install openwong2kim.wmux
 - 🛡️ **Token-authed IPC**, SSRF guard, PTY input sanitization, randomized CDP port, Electron Fuses
 - 📱 **`wmux web`** — your live panes in a phone browser (PWA-installable), read-only and loopback-only by default; input and network exposure are explicit, warned-about opt-ins
 - ⬆️ **In-app auto-update** on Windows and macOS (arm64) — checked every 30 minutes, SHA-256 verified against a published manifest before it installs
-- 🎨 **10 UI themes** (Amber by default · Catppuccin · Nightowl · Monochrome · Void · Hinomaru · Taegeuk · Stars & Stripes · Red Dynasty · Custom) and **10 terminal palettes**, light ones included &nbsp;·&nbsp; 🌏 **23 locales scaffolded** — English & 한국어 complete, 日本語 / 中文 in progress — **[translations welcome](https://github.com/openwong2kim/wmux/labels/good%20first%20issue)**
+- 🎨 **10 UI themes** (Amber by default · Catppuccin · Nightowl · Monochrome · Void · Hinomaru · Taegeuk · Stars & Stripes · Red Dynasty · Custom) and **10 terminal palettes**, light ones included &nbsp;·&nbsp; 🌏 **23 locales scaffolded** — English & 한국어 complete, 日本語 / 中文 in progress — **[translations welcome](https://github.com/skflowne/fmux/labels/good%20first%20issue)**
 
-> 💡 **Tip:** point Claude Code at the MCP tools (`browser_open`, `terminal_read`, `pane_list`, `a2a_task_send`, `channel_post`) or script the `wmux` CLI (`wmux send` / `read-screen` / `list-panes` / `wmux channel post`) to orchestrate panes programmatically.
+> 💡 **Tip:** point Claude Code at the MCP tools (`browser_open`, `terminal_read`, `pane_list`, `a2a_task_send`, `channel_post`) or script the `fmux` CLI (`fmux send` / `read-screen` / `list-panes` / `fmux channel post`) to orchestrate panes programmatically.
 
 ---
 
@@ -172,9 +187,9 @@ winget install openwong2kim.wmux
 
 **Multi-agent (A2A)** — agent-to-agent messaging + task delegation addressed by pane/surface, same-workspace and cross-workspace. Per-pane **execute approval gate** (a remote agent can't spawn a `bypassPermissions` worker in your workspace without your approval). Symmetric reply (a reply returns to the exact pane that asked), pollable task inbox on the EventBus, broadcast, and a unified approval inbox in Fleet View.
 
-**Channels** — Slack-style rooms for a workspace's agents: create / join / invite / post / read / archive, each message carrying a server-verified sender — shown as the sender's pane identity chip plus a per-workspace color badge, so you can tell agents apart at a glance. A durable per-member inbox (unread + @-mention counts, survives reboot), a human-readable right-side dock, and a headless `wmux channel` CLI (`unread` / `read` / `post` / `ack` / `join` / `list`) so a nudged agent can catch up and reply.
+**Channels** — Slack-style rooms for a workspace's agents: create / join / invite / post / read / archive, each message carrying a server-verified sender — shown as the sender's pane identity chip plus a per-workspace color badge, so you can tell agents apart at a glance. A durable per-member inbox (unread + @-mention counts, survives reboot), a human-readable right-side dock, and a headless `fmux channel` CLI (`unread` / `read` / `post` / `ack` / `join` / `list`) so a nudged agent can catch up and reply.
 
-**Supervision & wmux.json** — declare panes/agents in a trust-gated `wmux.json` (auto-layout + custom commands). The daemon supervises declared agent panes like an init system: restart policy with backoff across process exits, daemon restarts, and full reboots, with a runaway-crash guard — and it resumes the exact agent conversation on restart, not a fresh shell.
+**Supervision & fmux.json** — declare panes/agents in a trust-gated `fmux.json` (auto-layout + custom commands). The daemon supervises declared agent panes like an init system: restart policy with backoff across process exits, daemon restarts, and full reboots, with a runaway-crash guard — and it resumes the exact agent conversation on restart, not a fresh shell.
 
 **Plugins** — sandboxed iframe plugin host with a bridge + explicit permission model and pane decorations.
 
@@ -201,7 +216,7 @@ Electron Main          Renderer (React 19 + Zustand)     Daemon (standalone)
 ├── AutoUpdater                MCP Server (stdio)
 └── ToastManager       ├── PlaywrightEngine (CDP, fast-fail)
                        ├── CDP RPC fallback
-                       └── Claude Code ⇄ wmux pipe bridge
+                       └── Claude Code ⇄ fmux pipe bridge
 ```
 
 </details>
@@ -213,36 +228,35 @@ Electron Main          Renderer (React 19 + Zustand)     Daemon (standalone)
 
 <br>
 
-**Is wmux a tmux port?** No — tmux was the inspiration, not the base. wmux is a native **workspace multiplexer** on Electron (ConPTY on Windows, forkpty on macOS): tmux-*style* split panes, prefix keys, and session persistence, but it also multiplexes agents, git worktrees, a browser, and channels. No WSL / Cygwin / MSYS2.
+**Is Forge Mux a tmux port?** No — tmux was the inspiration, not the base. Forge Mux is a native **workspace multiplexer** on Electron (ConPTY on Windows, forkpty on macOS): tmux-*style* split panes, prefix keys, and session persistence, but it also multiplexes agents, git worktrees, a browser, and channels. No WSL / Cygwin / MSYS2.
 
-**Which Macs are supported?** Apple Silicon (arm64) — download the `.dmg` from [releases](https://github.com/openwong2kim/wmux/releases/latest). It is Developer ID signed, notarized and stapled, so Gatekeeper lets it through on first launch. Intel builds aren't produced right now; open an issue if you need one.
+**Which Macs are supported?** Apple Silicon (arm64), building from source — prebuilt `.dmg` releases aren't published yet; open an issue if you need one. If Gatekeeper warns on first launch, right-click the app → **Open**.
 
-**Can I reach my panes from my phone?** Yes — `wmux web` serves your live panes to a browser (PWA-installable). It is **read-only and loopback-only by default**; `--allow-input` and `--expose` are explicit opt-ins, and even read-only shows a pane's full scrollback to whoever can reach the port, so keep it behind Tailscale rather than the open internet.
+**Can I reach my panes from my phone?** Yes — `fmux web` serves your live panes to a browser (PWA-installable). It is **read-only and loopback-only by default**; `--allow-input` and `--expose` are explicit opt-ins, and even read-only shows a pane's full scrollback to whoever can reach the port, so keep it behind Tailscale rather than the open internet.
 
-**Works with Claude Code / Codex / Gemini?** Yes. wmux auto-detects them and registers an MCP server so they can drive the browser and read terminal output.
+**Works with Claude Code / Codex / Gemini?** Yes. Forge Mux auto-detects them and registers an MCP server so they can drive the browser and read terminal output.
 
 **Multiple agents at once?** Yes. Each pane is an independent PTY, and agents coordinate over A2A MCP tools — message each other, delegate tasks by pane, reply to the exact pane that asked, and gate any cross-agent code execution behind your approval.
 
-**Feels heavy, or a workspace switch is slow?** See [docs/performance.md](docs/performance.md) — what runs while a pane is hidden, the daemon's `config.json` knobs, and how to self-diagnose with `wmux doctor`.
+**Feels heavy, or a workspace switch is slow?** See [docs/performance.md](docs/performance.md) — what runs while a pane is hidden, the daemon's `config.json` knobs, and how to self-diagnose with `fmux doctor`.
 
-**"Windows protected your PC" warning?** The release pipeline already signs `Setup.exe` through [SignPath](https://signpath.io/), but with a *test* certificate while the [SignPath Foundation](https://signpath.org/) OSS certificate is pending — Windows does not trust it, so SmartScreen still reports an unknown publisher. It's safe: click **More info → Run anyway**, or install via **winget** / **Chocolatey** to skip the prompt.
+**"Windows protected your PC" warning?** The release pipeline signs `Setup.exe` through [SignPath](https://signpath.io/), but currently with a test certificate that Windows does not trust, so SmartScreen still reports an unknown publisher. It's safe to click **More info → Run anyway**; the install one-liner verifies the Setup.exe SHA-256 against the release manifest before running it.
 
-**Installer blocked with no "Run anyway"?** **Smart App Control (SAC)** on Windows 11 can block unsigned binaries outright. Check with `Get-MpComputerStatus | Select-Object SmartAppControlState`. SAC uses cloud reputation, so blocks are often transient — retry later, use winget/choco, or build from source ([#200](https://github.com/openwong2kim/wmux/issues/200)).
+**Installer blocked with no "Run anyway"?** **Smart App Control (SAC)** on Windows 11 can block unsigned binaries outright. Check with `Get-MpComputerStatus | Select-Object SmartAppControlState`. SAC uses cloud reputation, so blocks are often transient — retry later, or build from source ([#200](https://github.com/skflowne/fmux/issues/200)).
 
-**PowerShell one-liner** (downloads the prebuilt Setup.exe, verifies SHA-256, no build tools):
-```powershell
-irm https://raw.githubusercontent.com/openwong2kim/wmux/main/install.ps1 | iex
-```
+**How do updates work?** The app checks GitHub releases every 30 minutes, downloads the new installer in the background, verifies its SHA-256 against the published manifest, and offers a one-click "Restart to install" (a manual *Check for updates* in Settings installs in one step). Your sessions persist in the daemon across the restart — no need to re-run the install script.
 
 </details>
 
 ---
 
+<a id="build-from-source"></a>
+
 ## 🛠️ Build from source
 
 ```powershell
-git clone https://github.com/openwong2kim/wmux.git
-cd wmux
+git clone https://github.com/skflowne/fmux.git
+cd fmux
 npm install
 npm start          # dev mode
 npm run make       # build installer
@@ -254,17 +268,17 @@ Requires Node 18+ and Python 3.x, plus a native toolchain: VS Build Tools (C++ w
 
 ## 🙌 Contributors
 
-wmux is built in the open. Huge thanks to everyone who's shipped code, squashed bugs, and translated locales:
+Forge Mux is a fork of [wmux](https://github.com/openwong2kim/wmux), based on upstream version 3.33. All credit for the source Forge Mux builds on goes to the upstream project. Huge thanks to everyone who's shipped code, squashed bugs, and translated locales over there:
 
 [![Contributors](https://contrib.rocks/image?repo=openwong2kim/wmux)](https://github.com/openwong2kim/wmux/graphs/contributors)
 
-Community shout-outs to [@snowyukitty](https://github.com/snowyukitty), [@matdac6](https://github.com/matdac6), [@margvez](https://github.com/margvez), [@zer0ken](https://github.com/zer0ken), [@AnandSundar](https://github.com/AnandSundar), [@cloim](https://github.com/cloim), [@cheyras](https://github.com/cheyras), [@junbeom09](https://github.com/junbeom09), [@rayss868](https://github.com/rayss868), [@dev-minggyu](https://github.com/dev-minggyu), and [@alphabeen](https://github.com/alphabeen) for their contributions. 💛
+Community shout-outs to [@snowyukitty](https://github.com/snowyukitty), [@matdac6](https://github.com/matdac6), [@margvez](https://github.com/margvez), [@zer0ken](https://github.com/zer0ken), [@AnandSundar](https://github.com/AnandSundar), [@cloim](https://github.com/cloim), [@cheyras](https://github.com/cheyras), [@junbeom09](https://github.com/junbeom09), [@rayss868](https://github.com/rayss868), [@dev-minggyu](https://github.com/dev-minggyu), and [@alphabeen](https://github.com/alphabeen) for their contributions to upstream wmux. 💛
 
-**New here?** Grab a [**good first issue**](https://github.com/openwong2kim/wmux/labels/good%20first%20issue), help translate a locale (한국어 complete · 日本語 / 中文 in progress), or read [**CONTRIBUTING.md**](CONTRIBUTING.md). PRs welcome.
+**New here?** Grab a [**good first issue**](https://github.com/skflowne/fmux/labels/good%20first%20issue) on the Forge Mux fork, help translate a locale (한국어 complete · 日本語 / 中文 in progress), or read [**CONTRIBUTING.md**](CONTRIBUTING.md). PRs welcome.
 
 Built on [xterm.js](https://xtermjs.org/), [node-pty](https://github.com/microsoft/node-pty), [Electron](https://www.electronjs.org/), and [Playwright](https://playwright.dev/).
 
-> wmux detects AI coding agents for status display only. It does not call AI APIs, capture agent output, or automate agent interactions. You are responsible for complying with your AI provider's Terms of Service.
+> Forge Mux detects AI coding agents for status display only. It does not call AI APIs, capture agent output, or automate agent interactions. You are responsible for complying with your AI provider's Terms of Service.
 
 ## License
 
@@ -274,6 +288,6 @@ Built on [xterm.js](https://xtermjs.org/), [node-pty](https://github.com/microso
 
 <div align="center"><sub>⭐ Star history</sub><br>
 
-[![Star History](https://api.star-history.com/svg?repos=openwong2kim/wmux&type=Date)](https://star-history.com/#openwong2kim/wmux&Date)
+[![Star History](https://api.star-history.com/svg?repos=skflowne/fmux&type=Date)](https://star-history.com/#skflowne/fmux&Date)
 
 </div>

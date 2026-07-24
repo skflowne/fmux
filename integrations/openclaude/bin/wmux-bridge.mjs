@@ -6,12 +6,12 @@
 //   1. Determines the hook name from process.argv[2].
 //   2. Reads the OpenClaude hook payload from stdin (JSON).
 //   3. Builds the canonical AgentSignal envelope.
-//   4. Sends it to the first wmux endpoint that answers: the DAEMON control
-//      pipe (`daemon.hooks.signal`, token ~/.wmux/daemon-auth-token — works
+//   4. Sends it to the first Forge Mux endpoint that answers: the DAEMON control
+//      pipe (`daemon.hooks.signal`, token ~/.fmux/daemon-auth-token — works
 //      with the GUI closed), else the MAIN pipe (`hooks.signal`, token
-//      ~/.wmux-auth-token). WMUX_HOOKS_TO_MAIN=1 forces main-only.
-//   5. Logs the outcome (and the endpoint that served it) to ~/.wmux/bridge.log.
-//   6. Exits 0 ALWAYS (so a wmux problem never breaks OpenClaude).
+//      ~/.fmux-auth-token). WMUX_HOOKS_TO_MAIN=1 forces main-only.
+//   5. Logs the outcome (and the endpoint that served it) to ~/.fmux/bridge.log.
+//   6. Exits 0 ALWAYS (so a Forge Mux problem never breaks OpenClaude).
 //
 // THIS FILE IS SELF-CONTAINED. It runs from inside an OpenClaude plugin
 // where TypeScript transpilation is NOT available. Do not import anything
@@ -54,26 +54,26 @@ const HOOK_TO_KIND = {
 
 function getAuthTokenPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  return join(home, '.wmux-auth-token');
+  return join(home, '.fmux-auth-token');
 }
 
 function getPipeName() {
   if (process.platform === 'win32') {
     const username = userInfo().username || 'default';
-    return `\\\\.\\pipe\\wmux-${username}`;
+    return `\\\\.\\pipe\\fmux-${username}`;
   }
-  return join(homedir() || '/tmp', '.wmux.sock');
+  return join(homedir() || '/tmp', '.fmux.sock');
 }
 
 // ----- Daemon endpoint (M1: hook ingest lives in the daemon) ---------------
 //
 // The daemon is the always-on process and owns hook ingest, so it is tried
 // first; the main pipe stays as the fallback for an older wmux or a daemon
-// that is down. Same ~/.wmux (no data-suffix) limitation as bridge.log — the
+// that is down. Same ~/.fmux (no data-suffix) limitation as bridge.log — the
 // pane env strips WMUX_DATA_SUFFIX, so a dev-suffix daemon is unreachable here.
 function getDaemonAuthTokenPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  return join(home, '.wmux', 'daemon-auth-token');
+  return join(home, '.fmux', 'daemon-auth-token');
 }
 
 // Prefer the `daemon-pipe` hint file the daemon writes at boot (the name it
@@ -82,16 +82,16 @@ function getDaemonAuthTokenPath() {
 function getDaemonPipeName() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
   try {
-    const fromFile = readFileSync(join(home, '.wmux', 'daemon-pipe'), 'utf8').trim();
+    const fromFile = readFileSync(join(home, '.fmux', 'daemon-pipe'), 'utf8').trim();
     if (fromFile) return fromFile;
   } catch {
     // Hint file absent/unreadable — fall through to the derived name.
   }
   if (process.platform === 'win32') {
     const username = userInfo().username || 'default';
-    return `\\\\.\\pipe\\wmux-daemon-${username}`;
+    return `\\\\.\\pipe\\fmux-daemon-${username}`;
   }
-  return join(home, '.wmux', 'daemon.sock');
+  return join(home, '.fmux', 'daemon.sock');
 }
 
 function readTokenFile(tokenPath) {
@@ -122,7 +122,7 @@ function resolveTargets() {
 
 function getBridgeLogPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  const dir = join(home, '.wmux');
+  const dir = join(home, '.fmux');
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch {
@@ -135,7 +135,7 @@ function getBridgeLogPath() {
 // Durable resume-binding spool dir for failed RPC calls.
 function getResumeSpoolDir() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  const dir = join(home, '.wmux', 'resume-spool');
+  const dir = join(home, '.fmux', 'resume-spool');
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch {

@@ -29,7 +29,7 @@ function makePaths(targets: Array<{ label: string; settingsPath: string }>): Set
   fs.writeFileSync(scriptSource, '// statusline stub\n', 'utf8');
   return {
     targets,
-    scriptDest: path.join(tmpDir, '.wmux', 'hooks', 'wmux-statusline.mjs'),
+    scriptDest: path.join(tmpDir, '.fmux', 'hooks', 'fmux-statusline.mjs'),
     scriptSource,
   };
 }
@@ -295,8 +295,43 @@ describe('readClaudeAccountTargets', () => {
 describe('classifyStatusLine', () => {
   it('classifies none / wmux / foreign', () => {
     expect(classifyStatusLine({})).toBe('none');
-    expect(classifyStatusLine({ statusLine: { type: 'command', command: `node "x/${WMUX_STATUSLINE_MARKER}"` } })).toBe('wmux');
+    expect(classifyStatusLine({
+      statusLine: { type: 'command', command: `node "/home/u/.fmux/hooks/${WMUX_STATUSLINE_MARKER}"` },
+    })).toBe('wmux');
     expect(classifyStatusLine({ statusLine: { type: 'command', command: 'other' } })).toBe('foreign');
     expect(classifyStatusLine({ statusLine: 'weird' })).toBe('foreign');
+  });
+
+  it('treats an upstream ~/.wmux/hooks/wmux-statusline.mjs path as foreign', () => {
+    expect(
+      classifyStatusLine({
+        statusLine: {
+          type: 'command',
+          command: 'node "C:/Users/u/.wmux/hooks/wmux-statusline.mjs"',
+        },
+      }),
+    ).toBe('foreign');
+  });
+
+  it('treats a legacy Forge ~/.fmux/hooks/wmux-statusline.mjs path as owned', () => {
+    expect(
+      classifyStatusLine({
+        statusLine: {
+          type: 'command',
+          command: 'node "C:/Users/u/.fmux/hooks/wmux-statusline.mjs"',
+        },
+      }),
+    ).toBe('wmux');
+  });
+
+  it('does not claim fmux-statusline.mjs outside ~/.fmux/hooks/', () => {
+    expect(
+      classifyStatusLine({
+        statusLine: {
+          type: 'command',
+          command: 'node "C:/Users/u/bin/fmux-statusline.mjs"',
+        },
+      }),
+    ).toBe('foreign');
   });
 });

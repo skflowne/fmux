@@ -1,10 +1,10 @@
 /**
  * Windows "start on login" control.
  *
- * wmux registers itself in the per-user Run key so a reboot brings the app
+ * Forge Mux registers itself in the per-user Run key so a reboot brings the app
  * (and its daemon) back automatically:
  *
- *   HKCU\Software\Microsoft\Windows\CurrentVersion\Run  →  value "wmux" = "<exe>"
+ *   HKCU\Software\Microsoft\Windows\CurrentVersion\Run  →  value "fmux" = "<exe>"
  *
  * The registry value is the single source of truth for "is autostart on?" —
  * there is no separate config file to drift out of sync with it. Settings reads
@@ -17,26 +17,26 @@
  * All operations are best-effort: reg.exe failures never throw to callers (the
  * IPC layer reports the post-op state instead).
  *
- * macOS(darwin): 시스템 로그인 항목(app.set/getLoginItemSettings)이 동일한
- * 단일 진실 소스 역할을 한다. refreshAutostartEntry는 darwin에서 no-op —
- * 로그인 항목은 앱 번들 경로를 OS가 추적하므로 업데이트마다 재작성할 필요가 없다.
- * 그 외 플랫폼(linux 등)에서는 여전히 inert no-op(`false`)이라 renderer는
- * 무조건 호출해도 안전하다.
+ * macOS (darwin): system login items (app.set/getLoginItemSettings) serve as the
+ * same single source of truth. refreshAutostartEntry is a no-op on darwin —
+ * login items track the app bundle path via the OS, so no rewrite on each update.
+ * Other platforms (linux, etc.) remain inert no-ops (`false`), so the renderer
+ * may call unconditionally safely.
  */
 import { execFileSync } from 'child_process';
 import * as path from 'path';
 
 import { app } from 'electron';
 
-// darwin 분기용 electron app 접근자. 테스트에서 vi.mock('electron')으로 대체되며,
-// 어떤 이유로든 app이 없으면 null → darwin 분기는 win 경로와 동일하게
-// best-effort no-op으로 수렴한다.
+// electron app accessor for the darwin branch. Replaced by vi.mock('electron') in tests;
+// if app is unavailable for any reason → null → darwin branch converges to the same
+// best-effort no-op as the win path.
 function electronApp(): Electron.App | null {
   return app ?? null;
 }
 
 const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
-const VALUE_NAME = 'wmux';
+const VALUE_NAME = 'fmux';
 
 // Hard cap on every reg.exe spawn. A wedged reg.exe (AV interception, a
 // corrupt hive, a GPO hook) would otherwise hang the synchronous call — which
@@ -60,13 +60,19 @@ function regExe(): string {
  */
 
 /**
- * True only when the per-user Run key currently holds a `wmux` value. On any
- * platform other than win32, or if reg.exe errors for any reason, returns false.
+ * True only when the per-user Run key currently holds a `fmux` value. An
+ * upstream `wmux` Run entry is foreign and must not count as Forge autostart
+ * (and must never be deleted by Forge enable/disable).
+ *
+ * Pre-boundary Forge builds also wrote Run value `wmux`. That name collides
+ * 1:1 with live upstream, so this module never migrates or deletes it —
+ * remove a leftover manually (regedit / Task Manager Startup) if an old Forge
+ * install left `wmux` pointing at fmux.exe after upgrade.
  */
 export function isAutostartEnabled(): boolean {
   if (process.platform === 'darwin') {
-    // macOS: 시스템 로그인 항목이 단일 진실 소스 — 레지스트리의 Run 키와 동일한
-    // 역할. getLoginItemSettings 실패는 best-effort로 false 처리.
+    // macOS: system login items are the single source of truth — same role as the
+    // registry Run key. getLoginItemSettings failure is best-effort false.
     try {
       return electronApp()?.getLoginItemSettings().openAtLogin ?? false;
     } catch {
@@ -74,10 +80,14 @@ export function isAutostartEnabled(): boolean {
     }
   }
   if (process.platform !== 'win32') return false;
+  return hasRunValue(VALUE_NAME);
+}
+
+function hasRunValue(name: string): boolean {
   try {
-    // `reg query ... /v wmux` exits 0 when the value exists, non-zero (throws
+    // `reg query ... /v <name>` exits 0 when the value exists, non-zero (throws
     // via execFileSync) when it is absent. stdio ignored — we only need the code.
-    execFileSync(regExe(), ['query', RUN_KEY, '/v', VALUE_NAME], {
+    execFileSync(regExe(), ['query', RUN_KEY, '/v', name], {
       windowsHide: true,
       stdio: 'ignore',
       timeout: REG_TIMEOUT_MS,
@@ -88,10 +98,21 @@ export function isAutostartEnabled(): boolean {
   }
 }
 
+function deleteRunValue(name: string): void {
+  try {
+    execFileSync(regExe(), ['delete', RUN_KEY, '/v', name, '/f'], {
+      windowsHide: true,
+      timeout: REG_TIMEOUT_MS,
+    });
+  } catch {
+    /* best-effort — absent is fine */
+  }
+}
+
 /** Write the Run value pointing at `exePath` (defaults to this process). */
 export function enableAutostart(exePath: string = process.execPath): void {
   if (process.platform === 'darwin') {
-    // macOS: exePath 인자는 무시 — 로그인 항목은 현재 앱 번들에 자동으로 묶인다.
+    // macOS: exePath arg is ignored — login item is bound to the current app bundle automatically.
     try {
       electronApp()?.setLoginItemSettings({ openAtLogin: true });
     } catch {
@@ -122,14 +143,7 @@ export function disableAutostart(): void {
     return;
   }
   if (process.platform !== 'win32') return;
-  try {
-    execFileSync(regExe(), ['delete', RUN_KEY, '/v', VALUE_NAME, '/f'], {
-      windowsHide: true,
-      timeout: REG_TIMEOUT_MS,
-    });
-  } catch {
-    /* best-effort */
-  }
+  deleteRunValue(VALUE_NAME);
 }
 
 /** Convenience wrapper used by the IPC handler: set to the requested state. */

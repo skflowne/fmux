@@ -3,9 +3,10 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 
 import type { FirstRunStatus } from '../../shared/firstRun';
+import { WMUX_SERVER_KEY } from '../../shared/mcpTargets';
 
 /**
- * Read-only detector for Claude Code installation + wmux MCP registration.
+ * Read-only detector for Claude Code installation + Forge Mux MCP registration.
  *
  * Stateless and pure — no instance fields, no caching. Always returns a
  * fully-populated `FirstRunStatus`. All filesystem errors (ENOENT, EACCES,
@@ -66,7 +67,9 @@ export class ClaudeDetector {
     if (parsed === null || typeof parsed !== 'object') return false;
     const mcpServers = (parsed as { mcpServers?: unknown }).mcpServers;
     if (mcpServers === null || typeof mcpServers !== 'object') return false;
-    const wmux = (mcpServers as Record<string, unknown>).wmux;
-    return Boolean(wmux);
+    const servers = mcpServers as Record<string, unknown>;
+    // Only the Forge key counts. An upstream-only `wmux` entry must not
+    // suppress the first-run prompt to register `fmux`.
+    return Boolean(servers[WMUX_SERVER_KEY]);
   }
 }

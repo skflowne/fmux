@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getPipeName, ENV_KEYS, getPidMapDir } from '../../shared/constants';
 import { expandTilde } from '../../shared/expandTilde';
+import { applyWslPromptIntegration, isWslShell, splitWslCwd } from '../../shared/wslCwd';
 import { resolveSpawnEnv } from './resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../shared/windowsPathEnv';
 import { resolveEnvPolicy, type SpawnKind } from '../../shared/spawnKind';
@@ -113,8 +114,12 @@ export class PTYManager {
         // Windows-only — cmd.exe does not exist on macOS/Linux, and the
         // PROMPT env var has different semantics on Unix shells.
         if (!isWindows) break;
-        // $E = ESC, $P = current drive and path, $G = >
-        env['PROMPT'] = '$E]7;file://$COMPUTERNAME/$P$E\\$P$G';
+        // $E = ESC, $P = current drive and path, $G = >, $E\ = ST terminator.
+        // The host segment is cosmetic (parseOsc7Cwd strips everything up to the
+        // first '/'), so use a literal: '$C' is a CMD PROMPT metachar that expands
+        // to '(', so '$COMPUTERNAME' would emit a stray "(OMPUTERNAME" token.
+        // $P yields a native backslash path (C:\path); parseOsc7Cwd normalizes it.
+        env['PROMPT'] = '$E]7;file://localhost/$P$E\\$P$G';
         env[ENV_KEYS.SHELL_HOOK_ACTIVE] = '1';
         break;
       }
@@ -136,9 +141,10 @@ export class PTYManager {
     /** Workspace profile env overlay (see PtyCreateOptions.env). */
     env?: Record<string, string>;
     /**
-     * 스폰 출처 (실행 컨텍스트 정책). 로컬 모드는 exec/supervision을 지원하지
-     * 않으므로(pty.handler가 로컬 분기 전에 drop) 정책은 이 값만으로 결정된다:
-     * 'user-shell'만 env 투과, 나머지·미지정은 fail-closed로 gated.
+     * Spawn origin (execution-context policy). Local mode has no exec/supervision
+     * (pty.handler drops before the local branch), so policy is determined solely by
+     * this value: only 'user-shell' passes env through; everything else/unspecified
+     * is fail-closed gated.
      */
     spawnKind?: SpawnKind;
   }): PTYInstance {
@@ -176,8 +182,8 @@ export class PTYManager {
     // 1d: default channel member id = the pane's ptyId, symmetric with the
     // daemon-mode stamp in pty.handler (see ENV_KEYS.MEMBER_ID rationale).
     identity[ENV_KEYS.MEMBER_ID] = id;
-    // 실행 컨텍스트 정책. 로컬 모드는 exec/supervision이 없으므로 spawnKind만으로
-    // 결정 — 'user-shell'이면 자격증명 투과, 아니면 fail-closed gated.
+    // Execution-context policy. Local mode has no exec/supervision, so spawnKind alone
+    // decides — 'user-shell' passes credentials through; otherwise fail-closed gated.
     const policy = resolveEnvPolicy({ spawnKind: options?.spawnKind });
     // Multi-account (M0): overlay the workspace's bound-account env (main-owned
     // store) between baseline and profile; a manual profile CLAUDE_CONFIG_DIR
@@ -194,8 +200,8 @@ export class PTYManager {
     // long-lived control process still finds tools installed after it started —
     // native-terminal freshness. No-op off win32 / on failure (withFreshWindowsPath).
     const env = resolveSpawnEnv(withFreshWindowsPath(globalThis.process.env), options?.env, identity, getShellUtf8Locale(), policy, accountEnv);
-    // 관측 floor: gated pane에서 자격증명을 withheld하면 로컬 로그 1줄로 남긴다.
-    // 침묵이 신고 사건의 실제 원인이었다 — "왜 없지?"를 로그로 즉시 답한다.
+    // Observability floor: when a gated pane withholds credentials, log one local line.
+    // Silence was the real cause of incident reports — the log answers "why missing?" immediately.
     if (policy === 'gated') {
       const withheld = withheldCredentialNames(globalThis.process.env);
       if (withheld.length > 0) {
@@ -208,19 +214,35 @@ export class PTYManager {
 
     // Detect shell type and inject hook
     const shellType = this.detectShellType(shell);
-    const hookInjection = this.buildHookInjection(shellType, env);
+    let hookInjection: { args: string[]; env: Record<string, string> };
+    if (isWslShell(shell)) {
+      const hookPath = path.join(this.getShellHooksDir(), 'bash.sh');
+      hookInjection = fs.existsSync(hookPath)
+        ? applyWslPromptIntegration(shell, env, hookPath)
+        : { args: [], env };
+    } else {
+      hookInjection = this.buildHookInjection(shellType, env);
+    }
 
     // node-pty throws synchronously on a missing/invalid shell binary or an
     // unreadable cwd (common on macOS/Linux where the shell path differs from
     // Windows). Surface an actionable error instead of the raw node-pty throw.
     // (useConpty is a Windows-only hint; node-pty ignores it elsewhere.)
+    // Track B (WSL/Ubuntu cwd): when `shell` is wsl.exe and `cwd` is a
+    // Linux-style path (or `\\wsl$\...`/`\\wsl.localhost\...` UNC), node-pty
+    // cannot use it as the spawn cwd — ConPTY/CreateProcess only resolve
+    // Windows paths. Give node-pty a safe Windows cwd (the caller's home)
+    // and let `wsl.exe --cd <linuxpath>` do the actual positioning instead.
+    // No-op for every other shell/cwd combination (see wslCwd.ts).
+    const { spawnCwd, prefixArgs } = splitWslCwd(shell, cwd, os.homedir());
+
     let ptyProcess: ReturnType<typeof pty.spawn>;
     try {
-      ptyProcess = pty.spawn(shell, hookInjection.args, {
+      ptyProcess = pty.spawn(shell, [...prefixArgs, ...hookInjection.args], {
         name: 'xterm-256color',
         cols: options?.cols || 80,
         rows: options?.rows || 24,
-        cwd,
+        cwd: spawnCwd,
         env: hookInjection.env,
         useConpty: true,
       });

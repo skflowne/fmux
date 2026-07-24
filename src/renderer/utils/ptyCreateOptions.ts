@@ -9,9 +9,9 @@ export interface PtyCreateOptions {
   workspaceId?: string;
   surfaceId?: string;
   /**
-   * 스폰 출처 (실행 컨텍스트 env 정책). 사용자가 UI로 직접 여는 셸 pane만
-   * 'user-shell'로 스탬프해 자격증명을 투과받는다. 프로그래매틱 스폰(MCP·company
-   * provisioner·project seed)은 스탬프를 생략 → main이 fail-closed로 gated 처리.
+   * Spawn origin (runtime env policy). Only shell panes opened directly by the user
+   * via UI are stamped 'user-shell' to receive credential passthrough. Programmatic
+   * spawns (MCP, company provisioner, project seed) omit the stamp → main fail-closed gates them.
    */
   spawnKind?: SpawnKind;
   /**
@@ -71,6 +71,12 @@ export function withDefaultShell<T extends PtyCreateOptions>(
  *   per-pane override wins over the workspace default).
  * - The profile's defaultPaneCommand becomes `initialCommand` only when the
  *   caller didn't already specify one (an explicit command always wins).
+ * - The profile's `shell` fills `options.shell` only when the caller didn't
+ *   already specify one. Shell precedence (Track A): explicit per-pane shell
+ *   > workspace profile.shell > global defaultShell — callers must therefore
+ *   apply this BEFORE withDefaultShell (withDefaultShell(withWorkspaceProfile(
+ *   opts, profile), defaultShell)) so the global default only fills when
+ *   neither an explicit nor a profile shell was set.
  *
  * Pure and side-effect-free: returns the original object untouched when there
  * is no profile, so callsites with no configured workspace stay byte-identical.
@@ -86,6 +92,9 @@ export function withWorkspaceProfile<T extends PtyCreateOptions>(
   }
   if (profile.defaultPaneCommand && next.initialCommand === undefined) {
     next.initialCommand = profile.defaultPaneCommand;
+  }
+  if (profile.shell && next.shell === undefined) {
+    next.shell = profile.shell;
   }
   return next;
 }

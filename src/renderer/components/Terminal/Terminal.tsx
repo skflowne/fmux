@@ -161,7 +161,7 @@ export default function TerminalComponent({ ptyId: externalPtyId, shell, cwd, on
       : 'global';
     console.log(`[Terminal] self-create PTY: shell=${shell}, cwd=${respawnCwd ?? '(home)'} source=${cwdSource} surfaceCwd=${cwd ?? '-'} cols=${cols}, rows=${rows}, ws=${workspaceId}, surface=${surfaceId ?? '-'}`);
     void ipcInvokeRef.current<{ id: string; cwd?: string }>(() =>
-      window.electronAPI.pty.create(withWorkspaceProfile(withDefaultShell({ shell, cwd: respawnCwd, cols, rows, workspaceId, surfaceId, spawnKind: 'user-shell' }, defaultShell), profile))
+      window.electronAPI.pty.create(withDefaultShell(withWorkspaceProfile({ shell, cwd: respawnCwd, cols, rows, workspaceId, surfaceId, spawnKind: 'user-shell' }, profile), defaultShell))
     ).then((result) => {
       // v2 RCA fix (adversarial review): release the latch once this create
       // settles. It guards against DOUBLE-create within one attempt, but as a
@@ -176,7 +176,7 @@ export default function TerminalComponent({ ptyId: externalPtyId, shell, cwd, on
         return;
       }
       if (cancelled) {
-        // 이미 unmount됨 — PTY 정리
+        // Already unmounted — PTY cleanup
         window.electronAPI.pty.dispose(result.data.id);
         return;
       }
@@ -200,7 +200,7 @@ export default function TerminalComponent({ ptyId: externalPtyId, shell, cwd, on
     });
 
     return () => { cancelled = true; };
-  }, [externalPtyId, shell, cwd]); // onPtyCreated 제거 (stale closure 방지)
+  }, [externalPtyId, shell, cwd]); // removed onPtyCreated (stale closure prevention)
 
   // isVisible = workspace is shown AND this surface tab is the active one.
   // useTerminal uses this to skip fit() when the container is display:none.
@@ -347,7 +347,9 @@ export default function TerminalComponent({ ptyId: externalPtyId, shell, cwd, on
         flexDirection: 'column',
         width: '100%',
         height: '100%',
+        minHeight: 0,
         position: 'relative',
+        overflow: 'hidden',
       }}
     >
       {/* Session restore overlay */}
@@ -375,7 +377,7 @@ export default function TerminalComponent({ ptyId: externalPtyId, shell, cwd, on
         draggable={false}
         onDragOver={handleTerminalDragOver}
         onDrop={handleTerminalDrop}
-        style={{ width: '100%', height: '100%', padding: '4px' }}
+        style={{ width: '100%', height: '100%', minHeight: 0, padding: '4px', overflow: 'hidden' }}
       />
 
       {/* Scrollback bookmark markers on the left edge */}

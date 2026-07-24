@@ -203,7 +203,7 @@ export class McpRegistrar {
       }
 
       this.registered = true;
-      console.log(`[McpRegistrar] Registered wmux MCP → ${mcpScript}`);
+      console.log(`[McpRegistrar] Registered fmux MCP → ${mcpScript}`);
     } catch (err) {
       console.error('[McpRegistrar] Failed to register:', err);
       // macOS Time Machine restore / sudo-written configs surface
@@ -343,7 +343,7 @@ export class McpRegistrar {
 
   /**
    * Install the Codex notify bridge to a STABLE, version-free location
-   * (`~/.wmux/hooks/wmux-codex-notify.mjs`) and register it as Codex's `notify`
+   * (`~/.fmux/hooks/fmux-codex-notify.mjs`) and register it as Codex's `notify`
    * program. Copying fresh on every boot keeps the installed script in lock-step
    * with the running app version while the config path never goes stale (unlike
    * the versioned resources path). Skip-if-foreign lives in registerCodexNotify.
@@ -354,7 +354,7 @@ export class McpRegistrar {
       console.warn('[McpRegistrar] Codex notify script not found — skipping notify registration.');
       return;
     }
-    const dest = path.join(this.home, '.wmux', 'hooks', CODEX_NOTIFY_BASENAME);
+    const dest = path.join(this.home, '.fmux', 'hooks', CODEX_NOTIFY_BASENAME);
     try {
       const destDir = path.dirname(dest);
       if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
