@@ -13,8 +13,8 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 
-const PRIVATE_RULE = 'wmux LanLink (Private)';
-const PUBLIC_DENY_RULE = 'wmux LanLink (Public deny)';
+const PRIVATE_RULE = 'fmux LanLink (Private)';
+const PUBLIC_DENY_RULE = 'fmux LanLink (Public deny)';
 
 function netshPath(): string {
   return path.join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'netsh.exe');
@@ -38,7 +38,10 @@ function run(file: string, args: string[]): Promise<boolean> {
 export async function applyLanLinkFirewall(port: number, exe: string): Promise<void> {
   if (process.platform !== 'win32') return;
   const netsh = netshPath();
-  // delete-then-add so a port/exe change leaves no stale rule.
+  // delete-then-add so a port/exe change leaves no stale Forge rule.
+  // Never touch upstream `wmux LanLink …` rules — a co-installed wmux owns those.
+  // Pre-boundary Forge used those same names; automatic cleanup would break a
+  // live upstream install, so leftovers must be removed manually if needed.
   await run(netsh, ['advfirewall', 'firewall', 'delete', 'rule', `name=${PRIVATE_RULE}`]);
   await run(netsh, ['advfirewall', 'firewall', 'delete', 'rule', `name=${PUBLIC_DENY_RULE}`]);
   await run(netsh, [
@@ -56,7 +59,7 @@ export async function applyLanLinkFirewall(port: number, exe: string): Promise<v
   }
 }
 
-/** Remove both LanLink firewall rules (idempotent). win32-only. */
+/** Remove Forge Mux LanLink firewall rules (idempotent). win32-only. */
 export async function removeLanLinkFirewall(): Promise<void> {
   if (process.platform !== 'win32') return;
   const netsh = netshPath();

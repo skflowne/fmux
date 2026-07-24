@@ -23,8 +23,8 @@ vi.mock('child_process', () => ({
   execFileSync: (...args: unknown[]) => execFileSync(...args),
 }));
 
-// darwin 분기용 electron app mock — 로그인 항목 상태를 in-memory로 흉내낸다.
-// win/linux 테스트에서는 호출되지 않는다(호출 시 테스트에서 검증).
+// electron app mock for the darwin branch — fakes login-item state in memory.
+// Not invoked on win/linux tests (verified in those tests if called).
 const loginItemState = { openAtLogin: false };
 const setLoginItemSettings = vi.fn((s: { openAtLogin: boolean }) => {
   loginItemState.openAtLogin = s.openAtLogin;
@@ -64,7 +64,17 @@ describe('autostart (win32)', () => {
     const { isAutostartEnabled } = await load();
     expect(isAutostartEnabled()).toBe(true);
     const [, argv] = execFileSync.mock.calls[0];
-    expect(argv).toEqual(['query', RUN_KEY, '/v', 'wmux']);
+    expect(argv).toEqual(['query', RUN_KEY, '/v', 'fmux']);
+  });
+
+  it('isAutostartEnabled ignores a co-installed upstream wmux Run value', async () => {
+    execFileSync.mockImplementation((_exe: string, argv: string[]) => {
+      if (argv.includes('fmux')) throw new Error('not found');
+      return Buffer.from('');
+    });
+    const { isAutostartEnabled } = await load();
+    expect(isAutostartEnabled()).toBe(false);
+    expect(execFileSync.mock.calls.map((c) => (c[1] as string[])[3])).toEqual(['fmux']);
   });
 
   it('isAutostartEnabled returns false when reg query throws (value absent)', async () => {
@@ -73,22 +83,22 @@ describe('autostart (win32)', () => {
     expect(isAutostartEnabled()).toBe(false);
   });
 
-  it('enableAutostart writes the Run value with the given exe path', async () => {
+  it('enableAutostart writes the fmux Run value and never deletes wmux', async () => {
     execFileSync.mockReturnValue(Buffer.from(''));
     const { enableAutostart } = await load();
-    enableAutostart('C:\\apps\\wmux\\wmux.exe');
-    const [, argv] = execFileSync.mock.calls[0];
-    expect(argv).toEqual([
-      'add', RUN_KEY, '/v', 'wmux', '/t', 'REG_SZ', '/d', '"C:\\apps\\wmux\\wmux.exe"', '/f',
+    enableAutostart('C:\\apps\\fmux\\fmux.exe');
+    expect(execFileSync.mock.calls.map((c) => c[1] as string[])).toEqual([
+      ['add', RUN_KEY, '/v', 'fmux', '/t', 'REG_SZ', '/d', '"C:\\apps\\fmux\\fmux.exe"', '/f'],
     ]);
   });
 
-  it('disableAutostart deletes the Run value', async () => {
+  it('disableAutostart deletes only the fmux Run value', async () => {
     execFileSync.mockReturnValue(Buffer.from(''));
     const { disableAutostart } = await load();
     disableAutostart();
-    const [, argv] = execFileSync.mock.calls[0];
-    expect(argv).toEqual(['delete', RUN_KEY, '/v', 'wmux', '/f']);
+    expect(execFileSync.mock.calls.map((c) => c[1] as string[])).toEqual([
+      ['delete', RUN_KEY, '/v', 'fmux', '/f'],
+    ]);
   });
 
   it('setAutostartEnabled(true) adds then re-queries the resulting state', async () => {
@@ -99,29 +109,30 @@ describe('autostart (win32)', () => {
     expect(verbs).toEqual(['add', 'query']);
   });
 
-  it('refreshAutostartEntry re-adds only when the key already exists', async () => {
-    // query succeeds → key present → expect a follow-up add
+  it('refreshAutostartEntry re-adds only when the fmux key already exists', async () => {
+    // query succeeds → key present → expect a follow-up add (no wmux delete)
     execFileSync.mockReturnValue(Buffer.from(''));
     const { refreshAutostartEntry } = await load();
-    refreshAutostartEntry('C:\\apps\\wmux\\app-2\\wmux.exe');
+    refreshAutostartEntry('C:\\apps\\fmux\\app-2\\fmux.exe');
     const verbs = execFileSync.mock.calls.map((c) => (c[1] as string[])[0]);
     expect(verbs).toEqual(['query', 'add']);
   });
 
-  it('refreshAutostartEntry is a no-op when the key is absent', async () => {
-    // query throws → key absent → no add
+  it('refreshAutostartEntry is a no-op when the fmux key is absent', async () => {
+    // query throws → key absent → no add (and never probes wmux)
     execFileSync.mockImplementation(() => { throw new Error('not found'); });
     const { refreshAutostartEntry } = await load();
     refreshAutostartEntry();
     const verbs = execFileSync.mock.calls.map((c) => (c[1] as string[])[0]);
-    expect(verbs).toEqual(['query']); // query only, no add
+    expect(verbs).toEqual(['query']);
+    expect(execFileSync.mock.calls.map((c) => (c[1] as string[])[3])).toEqual(['fmux']);
   });
 });
 
 describe('autostart (darwin)', () => {
   beforeEach(() => setPlatform('darwin'));
 
-  it('setAutostartEnabled는 setLoginItemSettings로 등록/해제하고 openAtLogin을 되읽는다', async () => {
+  it('setAutostartEnabled registers/unregisters via setLoginItemSettings and reads back openAtLogin', async () => {
     electronAppAvailable = true;
     loginItemState.openAtLogin = false;
     const mod = await load();
@@ -129,11 +140,11 @@ describe('autostart (darwin)', () => {
     expect(setLoginItemSettings).toHaveBeenCalledWith({ openAtLogin: true });
     expect(mod.setAutostartEnabled(false)).toBe(false);
     expect(setLoginItemSettings).toHaveBeenLastCalledWith({ openAtLogin: false });
-    // darwin 경로는 reg.exe를 절대 스폰하지 않는다
+    // darwin path never spawns reg.exe
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
-  it('electron app 미가용 시 best-effort로 false를 반환한다', async () => {
+  it('returns false best-effort when electron app is unavailable', async () => {
     electronAppAvailable = false;
     const mod = await load();
     expect(mod.isAutostartEnabled()).toBe(false);
@@ -142,7 +153,7 @@ describe('autostart (darwin)', () => {
   });
 });
 
-describe('autostart (linux 등 기타 플랫폼)', () => {
+describe('autostart (linux and other platforms)', () => {
   beforeEach(() => setPlatform('linux'));
 
   it('every function is inert and reg.exe is never spawned', async () => {

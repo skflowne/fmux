@@ -369,7 +369,7 @@ export function useKeyboard() {
         const state = store.getState();
         const ws = state.workspaces.find((w) => w.id === state.activeWorkspaceId);
         if (ws) {
-          // 워크스페이스 내 모든 PTY 정리
+          // Dispose all PTYs in the workspace
           const disposePtys = (pane: import('../../shared/types').Pane) => {
             if (pane.type === 'leaf') {
               for (const s of pane.surfaces) {
@@ -483,7 +483,7 @@ export function useKeyboard() {
           // Issue #175: new tabs honor profile.startupCwd > global startupDirectory.
           const cwd = resolveStartupCwd({ splitInheritsCwd: false, profile: ws.profile, startupDirectory: state.startupDirectory });
           void ipcInvokeRef.current<{ id: string; cwd?: string }>(() =>
-            window.electronAPI.pty.create(withWorkspaceProfile(withDefaultShell({ workspaceId: ws.id, cwd, spawnKind: 'user-shell' }, state.defaultShell), ws.profile))
+            window.electronAPI.pty.create(withDefaultShell(withWorkspaceProfile({ workspaceId: ws.id, cwd, spawnKind: 'user-shell' }, ws.profile), state.defaultShell))
           ).then((result) => {
             if (result.ok) {
               // #515: adopt the cwd main actually spawned in so the surface

@@ -5,9 +5,9 @@
   src/main/mcp/methodCapabilityMap.ts.
 -->
 
-# wmux API Reference (generated)
+# Forge Mux API Reference (generated)
 
-> **Generated from wmux v3.33.0 sources.** This file is produced by
+> **Generated from Forge Mux v1.0.0 sources.** This file is produced by
 > `scripts/gen-api-reference.mjs` directly from the code — it lists every
 > RPC method, event type, required capability, and the key event-bus
 > constants exactly as the running daemon sees them. For the hand-curated
@@ -16,10 +16,10 @@
 > [`../PROTOCOL.md`](../PROTOCOL.md).
 
 Transport (see `src/shared/constants.ts`): JSON-RPC over a Named Pipe at
-`\\.\pipe\wmux-<username>` (Windows) or a Unix domain socket at
-`~/.wmux.sock` (POSIX). The first request on each connection carries the
-UUID token from `~/.wmux-auth-token` in its `token` field. On Windows, a
-loopback TCP fallback (port in `~/.wmux-tcp-port`) is used when the pipe
+`\\.\pipe\fmux-<username>` (Windows) or a Unix domain socket at
+`~/.fmux.sock` (POSIX). The first request on each connection carries the
+UUID token from `~/.fmux-auth-token` in its `token` field. On Windows, a
+loopback TCP fallback (port in `~/.fmux-tcp-port`) is used when the pipe
 returns `EPERM`. Wire framing: newline-delimited JSON, one object per line.
 
 ---

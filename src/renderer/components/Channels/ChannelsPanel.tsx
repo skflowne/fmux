@@ -421,7 +421,7 @@ export interface ChannelsPanelViewProps {
    *  came online isn't reflected yet). */
   onRefresh?: () => void;
   /** Ship review C1 — the attached daemon predates the channels migration this
-   *  renderer requires (it survived the app upgrade). Renders a "restart wmux"
+   *  renderer requires (it survived the app upgrade). Renders a "restart Forge Mux"
    *  banner; posting/joining may fail with NOT_A_MEMBER until the restart. */
   daemonStale?: boolean;
   /** operator-join (design §2.2/§3) — the discovery list backing the collapsed
@@ -542,7 +542,7 @@ export function ChannelsPanelView(props: ChannelsPanelViewProps): React.ReactEle
         >
           <span aria-hidden="true">⚠ </span>
           {t('channels.daemonStaleBanner') ||
-            'Channels were updated, but the background daemon is still on the old version. Quit wmux fully and start it again to finish.'}
+            'Channels were updated, but the background daemon is still on the old version. Quit Forge Mux fully and start it again to finish.'}
         </div>
       )}
 
@@ -914,8 +914,8 @@ export function ChannelsPanel(): React.ReactElement {
   const company = useStore((s) => s.company);
   // P5: the human's creator identity is the reserved ws-human seat (see
   // selfWorkspaceId below), independent of which workspace is active.
-  // A1: 이전 `workspaces` 통구독은 아래 handleJoinDiscoverable의 stale dep로만
-  // 남아 있었고 실제로 참조되지 않았다 — 구독과 dep를 함께 제거(동작 불변).
+  // A1: previous `workspaces` whole-store subscription only lingered as stale dep for
+  // handleJoinDiscoverable below and was never referenced — removed subscription and dep together (behavior unchanged).
   const channelMembers = useStore((s) => s.channelMembers);
   const setActiveChannel = useStore((s) => s.setActiveChannel);
   const createChannelDaemon = useStore((s) => s.createChannelDaemon);

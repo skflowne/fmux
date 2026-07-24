@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { sendRpc, setClientIdentity, setCommanderRole } from './wmux-client';
 import { COMMANDER_MODE_ARG, COMMANDER_TOOL_SURFACE } from '../shared/commanderSurface';
+import { WMUX_SERVER_KEY } from '../shared/mcpTargets';
 import type { RpcMethod } from '../shared/rpc';
 import { claimPinnedRoute, getPinnedRoute } from './paneResolver';
 import { resolveTerminalRoute, resolveCommanderRoute, type PidMapLookup } from './terminalRouting';
@@ -197,9 +198,9 @@ const A2A_TASK_UPDATE_SHAPE = {
   evidence: z
     .object({
       summary: z.string().describe('Required, non-empty. For completed: the completion summary. For failed: the failure reason.'),
-      // kind별 discriminated union — normalize 계약과 1:1 (command는 command 필수 +
-      // passed|failed, inspection/artifact는 verified|unverified). zod가 통과시킨
-      // 아이템이 normalize에서 malformed로 죽는 조합을 스키마 단계에서 제거한다.
+      // kind-specific discriminated union — 1:1 with normalize contract (command requires
+      // command field + passed|failed; inspection/artifact verified|unverified). Removes
+      // combinations that pass zod but die as malformed in normalize.
       items: z
         .array(
           z.discriminatedUnion('kind', [
@@ -364,7 +365,7 @@ function logIdentity(msg: string): void {
   if (loggedIdentityMsgs.has(msg)) return;
   if (loggedIdentityMsgs.size >= 50) loggedIdentityMsgs.clear();
   loggedIdentityMsgs.add(msg);
-  console.error(`[wmux-mcp] identity: ${msg}`);
+  console.error(`[fmux-mcp] identity: ${msg}`);
 }
 
 let identityEnvLogged = false;
@@ -378,7 +379,7 @@ function logIdentityEnvOnce(): void {
 }
 
 const server = new McpServer({
-  name: 'wmux',
+  name: WMUX_SERVER_KEY,
   version: getVersion(),
 });
 
@@ -726,7 +727,7 @@ async function requireWorkspaceId(): Promise<string> {
   if (!wsId) {
     throw new Error(
       'Workspace identity unknown. This MCP server cannot determine which workspace it belongs to. ' +
-      'Make sure you are running inside a wmux terminal workspace.'
+      'Make sure you are running inside a Forge Mux terminal workspace.'
     );
   }
   return wsId;
@@ -899,7 +900,7 @@ server.tool(
 
 server.tool(
   'terminal_read_events',
-  'Return structured OSC 133 prompt/command events (prompt_start, prompt_end, command_start, command_end with exit code) from a terminal. Requires shell integration — wmux auto-injects for pwsh and bash; cmd.exe is unsupported. Use this instead of terminal_read when you need command boundaries, exit codes, or byte offsets for diff-style reads.',
+  'Return structured OSC 133 prompt/command events (prompt_start, prompt_end, command_start, command_end with exit code) from a terminal. Requires shell integration — Forge Mux auto-injects for pwsh and bash; cmd.exe is unsupported. Use this instead of terminal_read when you need command boundaries, exit codes, or byte offsets for diff-style reads.',
   TERMINAL_READ_EVENTS_SHAPE,
   async ({ ptyId, limit, sinceOffset, lastCommandOnly }) => {
     const route = await resolveTerminalRouteBound(ptyId);
@@ -1005,7 +1006,7 @@ server.tool(
 
 server.tool(
   'workspace_list',
-  'List all workspaces in wmux',
+  'List all workspaces in Forge Mux',
   {},
   async () => callRpc('workspace.list'),
 );
@@ -1082,7 +1083,7 @@ server.tool(
 
 server.tool(
   'wmux_events_poll',
-  'Poll the wmux EventBus for pane, process, agent, notification, and A2A task lifecycle events. Cursor-based: pass `cursor` = the last `seq` you saw (start with 0 to replay from oldest in the ring). Returns { events, nextCursor, resync? }. `resync: true` means your cursor drifted past the in-memory ring (1024 events) and you should reconcile via pane_list. Events are auto-scoped to the calling workspace — EXCEPT `a2a.task`, which is dual-party (visible to both the sending and receiving workspace; see the `types` field for details).',
+  'Poll the Forge Mux EventBus for pane, process, agent, notification, and A2A task lifecycle events. Cursor-based: pass `cursor` = the last `seq` you saw (start with 0 to replay from oldest in the ring). Returns { events, nextCursor, resync? }. `resync: true` means your cursor drifted past the in-memory ring (1024 events) and you should reconcile via pane_list. Events are auto-scoped to the calling workspace — EXCEPT `a2a.task`, which is dual-party (visible to both the sending and receiving workspace; see the `types` field for details).',
   WMUX_EVENTS_POLL_SHAPE,
   async ({ cursor, types, max }) => {
     const workspaceId = await requireWorkspaceId();
@@ -1131,7 +1132,7 @@ server.tool(
 // 2. a2a_discover — Agent Card discovery
 server.tool(
   'a2a_discover',
-  'List all available workspaces/agents and their names. ALWAYS call this first when the user references a workspace by number or name (e.g. "3번", "Workspace 1") so you know valid targets.',
+  'List all available workspaces/agents and their names. ALWAYS call this first when the user references a workspace by number or name (e.g. "workspace 3", "Workspace 1") so you know valid targets.',
   {},
   async () => callRpc('a2a.discover'),
 );
@@ -1189,7 +1190,7 @@ const sendMessageHandler = async ({ to, pane_id, surface_id, title, task_id, mes
 
 server.tool(
   'send_message',
-  'Send a message to another workspace. Use when asked to talk to, greet, or send anything to workspace 1/2/3 etc. Accepts number ("1", "3번"), name ("Workspace 2"), or ID.',
+  'Send a message to another workspace. Use when asked to talk to, greet, or send anything to workspace 1/2/3 etc. Accepts number ("1", "3"), name ("Workspace 2"), or ID.',
   SEND_MESSAGE_SHAPE,
   sendMessageHandler,
 );
@@ -1225,8 +1226,9 @@ server.tool(
     const senderPtyId = getTaskSenderPtyId();
     if (senderPtyId) params.senderPtyId = senderPtyId;
     if (message) params.message = message;
-    // 완료증거는 artifact_name/artifact_data(A2A-spec 산출물 채널)와 병존하는 별도
-    // wmux 완료계약 채널 — 권위 정규화·검증은 렌더러/데몬이 수행(여긴 통과만).
+    // Completion evidence is a separate wmux completion-contract channel coexisting with
+    // artifact_name/artifact_data (A2A-spec artifact channel) — authority normalization/
+    // validation is renderer/daemon (pass-through here only).
     if (evidence) params.evidence = evidence;
     if (artifact_name) {
       params.artifact = {

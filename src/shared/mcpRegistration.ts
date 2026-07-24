@@ -178,10 +178,35 @@ export function registerTarget(
       ownedKeys?.add(WMUX_SERVER_KEY);
     }
 
-    // Legacy cleanup only applies to Claude's JSON (old wmux-playwright keys
-    // plus the removed wmux-a2a server, in case a historical stray exists).
+    // Do NOT remove a co-installed upstream `wmux` MCP key. Forge only owns
+    // `fmux`. Historical Claude-only dead keys are removed only when the entry
+    // is Forge-shaped (`node` + script) AND the script path proves a leftover
+    // (under `~/.fmux/` or containing the dead key name). Prefer leave when unsure.
     if (target.id === 'claude') {
-      newText = removeMcpServers(newText, 'json', ['wmux-playwright', 'wmux-devtools', 'wmux-a2a']);
+      const deadKeys = ['wmux-playwright', 'wmux-devtools', 'wmux-a2a'] as const;
+      const toDrop: string[] = [];
+      for (const key of deadKeys) {
+        const entry = getMcpServerEntry(parsed, target.format, key);
+        if (!isWmuxOwnedEntry(entry)) continue;
+        const script = entry!.args[0].replace(/\\/g, '/');
+        const base = script.split('/').pop() ?? '';
+        if (script.includes('/.fmux/') || base.includes(key) || script.includes(`/${key}`)) {
+          toDrop.push(key);
+        }
+      }
+      if (toDrop.length > 0) {
+        newText = removeMcpServers(newText, 'json', toDrop);
+      }
+    }
+
+    // Pre-boundary Forge may have registered under key `wmux`. Drop that key
+    // only when the script path is under a Forge root — never when it points at
+    // upstream `~/.wmux/` / `%LOCALAPPDATA%\wmux`, and never when ambiguous.
+    {
+      const legacy = getMcpServerEntry(parsed, target.format, 'wmux');
+      if (isWmuxOwnedEntry(legacy) && isPathProvenForgeMcpScript(legacy!.args[0])) {
+        newText = removeMcpServers(newText, target.format, ['wmux']);
+      }
     }
   } catch {
     return { configPath, skipped: 'malformed', wrote: [], foreign };
@@ -259,6 +284,14 @@ export interface RegisterNotifyResult {
    *  user notify occupies the slot (left untouched); null = ours/absent. */
   skipped: 'absent' | 'malformed' | 'foreign' | null;
   wrote: boolean;
+}
+
+/** True when an MCP script path is a proven Forge leftover (never upstream wmux). */
+function isPathProvenForgeMcpScript(scriptPath: string): boolean {
+  const p = scriptPath.replace(/\\/g, '/');
+  // Upstream install roots — never treat as Forge leftovers.
+  if (p.includes('/.wmux/') || /\/AppData\/Local\/wmux\//i.test(p)) return false;
+  return p.includes('/.fmux/') || /\/AppData\/Local\/fmux\//i.test(p);
 }
 
 const norm = (p: string): string => p.replace(/\\/g, '/');

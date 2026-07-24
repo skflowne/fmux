@@ -6,10 +6,10 @@
 //   1. Determines the hook name from process.argv[2].
 //   2. Reads the OpenClaude hook payload from stdin (JSON).
 //   3. Builds the canonical AgentSignal envelope.
-//   4. Reads the wmux auth token from ~/.wmux-auth-token.
+//   4. Reads the wmux auth token from ~/.fmux-auth-token.
 //   5. Connects to the wmux main-process named pipe.
 //   6. Sends an RPC: hooks.signal { ...envelope }
-//   7. Logs the outcome to ~/.wmux/bridge.log.
+//   7. Logs the outcome to ~/.fmux/bridge.log.
 //   8. Exits 0 ALWAYS (so a wmux problem never breaks OpenClaude).
 //
 // THIS FILE IS SELF-CONTAINED. It runs from inside an OpenClaude plugin
@@ -51,20 +51,20 @@ const HOOK_TO_KIND = {
 
 function getAuthTokenPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  return join(home, '.wmux-auth-token');
+  return join(home, '.fmux-auth-token');
 }
 
 function getPipeName() {
   if (process.platform === 'win32') {
     const username = userInfo().username || 'default';
-    return `\\\\.\\pipe\\wmux-${username}`;
+    return `\\\\.\\pipe\\fmux-${username}`;
   }
-  return join(homedir() || '/tmp', '.wmux.sock');
+  return join(homedir() || '/tmp', '.fmux.sock');
 }
 
 function getBridgeLogPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  const dir = join(home, '.wmux');
+  const dir = join(home, '.fmux');
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch {
@@ -77,7 +77,7 @@ function getBridgeLogPath() {
 // Durable resume-binding spool dir for failed RPC calls.
 function getResumeSpoolDir() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  const dir = join(home, '.wmux', 'resume-spool');
+  const dir = join(home, '.fmux', 'resume-spool');
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch {

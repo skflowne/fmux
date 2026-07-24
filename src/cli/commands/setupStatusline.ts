@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 /**
- * `wmux setup-statusline` — install the wmux usage statusline into Claude Code.
+ * `fmux setup-statusline` — install the wmux usage statusline into Claude Code.
  *
  * Sets the `statusLine` command in Claude Code settings so the line under the
  * input box shows `<model> · <account> · ctx N% · 5h N% ↺ HH:MM · 7d N% ↺ Nh`
@@ -20,23 +20,23 @@ import * as path from 'path';
  * account's config dir (accounts.json) — CLAUDE_CONFIG_DIR partitions settings
  * entirely, so each account dir needs its own statusLine entry.
  *
- * Same durability strategy as `wmux setup-hooks`: the script is copied to the
- * stable `~/.wmux/hooks/wmux-statusline.mjs` (survives Squirrel app-x.y.z
+ * Same durability strategy as `fmux setup-hooks`: the script is copied to the
+ * stable `~/.fmux/hooks/fmux-statusline.mjs` (survives Squirrel app-x.y.z
  * updates), settings writes are atomic tmp+rename, corrupted settings.json
  * aborts that target, and a FOREIGN statusLine (user's own) is never clobbered.
  */
 
 const HELP_TEXT = `
-wmux setup-statusline — show per-account Claude usage in Claude Code's statusline
+fmux setup-statusline — show per-account Claude usage in Claude Code's statusline
 
 USAGE
-  wmux setup-statusline [--remove | --status] [--json]
+  fmux setup-statusline [--remove | --status] [--json]
 
 ACTIONS (mutually exclusive; default = install)
-  (default)    Copy the statusline script to ~/.wmux/hooks/ and set statusLine
+  (default)    Copy the statusline script to ~/.fmux/hooks/ and set statusLine
                in ~/.claude/settings.json and every registered claude account's
-               settings.json. A non-wmux statusLine is left untouched (skipped).
-  --remove     Remove only wmux-owned statusLine entries.
+               settings.json. A non-Forge Mux statusLine is left untouched (skipped).
+  --remove     Remove only Forge Mux-owned statusLine entries.
   --status     Report per-target install state.
 
 GLOBAL FLAGS
@@ -48,13 +48,13 @@ NOTE
   hasn't arrived yet (or the account has no subscription rate limits).
 `.trimStart();
 
-/** Substring identifying a wmux-owned statusLine command. */
-export const WMUX_STATUSLINE_MARKER = 'wmux-statusline.mjs';
+/** Substring identifying a Forge Mux-owned statusLine command. */
+export const WMUX_STATUSLINE_MARKER = 'fmux-statusline.mjs';
 
 export interface SetupStatuslinePaths {
   /** Settings files to edit: default dir first, then registered claude accounts. */
   targets: Array<{ label: string; settingsPath: string }>;
-  /** Stable install location: `~/.wmux/hooks/wmux-statusline.mjs`. */
+  /** Stable install location: `~/.fmux/hooks/fmux-statusline.mjs`. */
   scriptDest: string;
   /** Bundled script source, or null when it could not be located. */
   scriptSource: string | null;
@@ -64,8 +64,10 @@ export interface SetupStatuslinePaths {
  *  script (bundled next to the CLI / in cli-bundle / repo checkout). */
 export function findStatuslineSourceFrom(startDir: string): string | null {
   const candidates = [
-    'wmux-statusline.mjs',
+    'wmux-statusline.mjs', // packaged source basename (kept for rebase ease)
+    'fmux-statusline.mjs',
     path.join('cli-bundle', 'wmux-statusline.mjs'),
+    path.join('cli-bundle', 'fmux-statusline.mjs'),
     path.join('dist', 'cli-bundle', 'wmux-statusline.mjs'),
     path.join('integrations', 'claude', 'bin', 'wmux-statusline.mjs'),
   ];
@@ -115,7 +117,7 @@ export function defaultPaths(): SetupStatuslinePaths {
   const home = os.homedir();
   const targets = [
     { label: 'default (~/.claude)', settingsPath: path.join(home, '.claude', 'settings.json') },
-    ...readClaudeAccountTargets(path.join(home, '.wmux')),
+    ...readClaudeAccountTargets(path.join(home, '.fmux')),
   ];
   // A registered account may point at ~/.claude itself — dedupe by settings
   // path. Case-fold only on Windows; case-sensitive filesystems treat
@@ -130,7 +132,7 @@ export function defaultPaths(): SetupStatuslinePaths {
   });
   return {
     targets: deduped,
-    scriptDest: path.join(home, '.wmux', 'hooks', 'wmux-statusline.mjs'),
+    scriptDest: path.join(home, '.fmux', 'hooks', 'fmux-statusline.mjs'),
     scriptSource: findStatuslineSourceFrom(__dirname),
   };
 }
@@ -180,13 +182,20 @@ function loadSettings(settingsPath: string): LoadResult {
   }
 }
 
-/** 'none' | 'wmux' | 'foreign' — what the target's statusLine currently is. */
+/** 'none' | 'wmux' | 'foreign' — what the target's statusLine currently is.
+ *  'wmux' here means Forge-owned (historical enum). Ownership is path-scoped
+ *  under `~/.fmux/hooks/` for `fmux-statusline.mjs` or legacy
+ *  `wmux-statusline.mjs` — never upstream `~/.wmux/hooks/…`. */
 export function classifyStatusLine(settings: Record<string, unknown>): 'none' | 'wmux' | 'foreign' {
   const sl = settings.statusLine;
   if (sl === undefined || sl === null) return 'none';
   if (sl && typeof sl === 'object' && !Array.isArray(sl)) {
     const cmd = (sl as Record<string, unknown>).command;
-    if (typeof cmd === 'string' && cmd.includes(WMUX_STATUSLINE_MARKER)) return 'wmux';
+    if (typeof cmd === 'string') {
+      const norm = cmd.replace(/\\/g, '/');
+      if (!norm.includes('/.fmux/hooks/')) return 'foreign';
+      if (norm.includes(WMUX_STATUSLINE_MARKER) || norm.includes('wmux-statusline.mjs')) return 'wmux';
+    }
   }
   return 'foreign';
 }
@@ -232,7 +241,7 @@ export function installStatusline(paths: SetupStatuslinePaths): StatuslineOutcom
     return {
       ...base,
       error:
-        'Could not locate the bundled wmux-statusline.mjs next to this CLI. Reinstall wmux or run from a repo checkout.',
+        'Could not locate the bundled wmux-statusline.mjs next to this CLI. Reinstall Forge Mux or run from a repo checkout.',
     };
   }
   const destDir = path.dirname(paths.scriptDest);
@@ -386,7 +395,7 @@ function printOutcome(outcome: StatuslineOutcome, jsonMode: boolean, verb: strin
     const note =
       t.outcome === 'installed' ? verb
       : t.outcome === 'removed' ? 'removed'
-      : t.outcome === 'skipped-foreign' ? 'SKIPPED — a non-wmux statusLine is already set'
+      : t.outcome === 'skipped-foreign' ? 'SKIPPED — a non-Forge Mux statusLine is already set'
       : t.outcome === 'skipped-corrupt' ? 'SKIPPED — settings.json is not valid JSON'
       : 'nothing to do';
     console.log(`  ${t.label}: ${note} (${t.settingsPath})`);
@@ -422,7 +431,7 @@ export async function handleSetupStatusline(args: string[], jsonMode: boolean): 
   }
   const unknown = args.filter((a) => a !== '--remove' && a !== '--status');
   if (unknown.length > 0) {
-    console.error(`Unknown argument(s): ${unknown.join(', ')}. Run 'wmux setup-statusline --help' for usage.`);
+    console.error(`Unknown argument(s): ${unknown.join(', ')}. Run 'fmux setup-statusline --help' for usage.`);
     process.exit(1);
     return;
   }

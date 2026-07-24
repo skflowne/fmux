@@ -326,8 +326,13 @@ export function removeMcpServers(
 // decision 1: skip-if-foreign). Root keys must precede tables in TOML, so the
 // insert lands before the first table header.
 
-/** Basename of the wmux Codex notify bridge — how we recognize our own entry. */
-export const CODEX_NOTIFY_BASENAME = 'wmux-codex-notify.mjs';
+/** Basename of the Forge Mux Codex notify bridge — recognized only under
+ *  `~/.fmux/hooks/` (see `isWmuxOwnedNotify`). Upstream uses
+ *  `wmux-codex-notify.mjs` under `~/.wmux/`; that must remain foreign.
+ *  A prior Forge copy at `~/.fmux/hooks/wmux-codex-notify.mjs` is still ours. */
+export const CODEX_NOTIFY_BASENAME = 'fmux-codex-notify.mjs';
+/** Pre-rename Forge basename — only owned when installed under `~/.fmux/hooks/`. */
+const LEGACY_FORGE_CODEX_NOTIFY_BASENAME = 'wmux-codex-notify.mjs';
 
 /** Read the root `notify` value (array of string tokens), or null when absent /
  *  not an array. Non-string elements are dropped (a shape we don't own). */
@@ -337,15 +342,16 @@ export function getNotify(parsed: Record<string, unknown>): string[] | null {
   return n.filter((x): x is string => typeof x === 'string');
 }
 
-/** True when the notify entry is wmux-owned: `["node", "<…/wmux-codex-notify.mjs>"]`.
- *  A foreign notify (user's own program) returns false so we leave it untouched. */
+/** True when the notify entry is Forge-owned under `~/.fmux/hooks/`:
+ *  - `["node", "<…/.fmux/hooks/fmux-codex-notify.mjs>"]`, or
+ *  - `["node", "<…/.fmux/hooks/wmux-codex-notify.mjs>"]` (pre-rename Forge install).
+ *  Basename-only matches outside that dir, upstream `~/.wmux/hooks/…`, and user
+ *  programs return false. */
 export function isWmuxOwnedNotify(notify: string[] | null): boolean {
-  return (
-    !!notify &&
-    notify.length >= 2 &&
-    notify[0] === 'node' &&
-    notify[1].replace(/\\/g, '/').endsWith(CODEX_NOTIFY_BASENAME)
-  );
+  if (!notify || notify.length < 2 || notify[0] !== 'node') return false;
+  const p = notify[1].replace(/\\/g, '/');
+  if (!p.includes('/.fmux/hooks/')) return false;
+  return p.endsWith(CODEX_NOTIFY_BASENAME) || p.endsWith(LEGACY_FORGE_CODEX_NOTIFY_BASENAME);
 }
 
 /** The canonical wmux notify line for a script path. JSON.stringify yields a

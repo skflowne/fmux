@@ -17,7 +17,7 @@ export const ko = {
   'sidebar.screenOff': '화면 끄기',
   'sidebar.screenOn': '화면 켜기',
   'sidebar.screenOffTooltip': '내장 화면만 끕니다 (외장 모니터는 유지)',
-  'sidebar.screenOffAccessibility': 'wmux에 손쉬운 사용 권한을 허용해 주세요 (시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용).',
+  'sidebar.screenOffAccessibility': 'Forge Mux에 손쉬운 사용 권한을 허용해 주세요 (시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용).',
   'sidebar.screenOffFailed': '내장 화면 전환에 실패했습니다.',
   'sidebar.agentTooltip': '에이전트 패널 토글',
 
@@ -33,6 +33,12 @@ export const ko = {
   'workspace.copied': '복사됨!',
   'workspace.gitSyncTooltip': 'ahead {ahead} · behind {behind} · 커밋 안 된 변경 {dirty}',
   'workspace.idleTooltip': '{time} 동안 에이전트 활동 없음',
+
+  // Workspace profile — Track A: per-workspace shell (remaining workspaceProfile.*
+  // keys fall back to en; only these three keys added for new UI)
+  'workspaceProfile.shellHeading': '셸',
+  'workspaceProfile.shellDefaultOption': '전역 기본값 사용',
+  'workspaceProfile.shellHint': '이 워크스페이스의 새 패널은 이 셸을 사용합니다. 기본값으로 두면 전역 설정을 따릅니다.',
 
   // Pane
   'pane.empty': '빈 창',
@@ -85,7 +91,7 @@ export const ko = {
   'palette.cmd.openFleetView': 'Fleet View 열기',
   'palette.cmd.openWorktaskCleanup': '태스크 정리 목록 열기',
   'palette.cmd.showGitDiff': 'Git Diff 보기',
-  // J3 — 태스크 정리 목록(WorktaskCleanupView)
+  // J3 — task cleanup list (WorktaskCleanupView)
   'worktask.cleanup.title': '태스크 정리 목록',
   'worktask.cleanup.rescan': '다시 스캔',
   'worktask.cleanup.scanning': '스캔 중…',
@@ -103,7 +109,7 @@ export const ko = {
   'palette.cmd.saveLayout': '현재 레이아웃을 템플릿으로 저장',
   'palette.cmd.layoutPrefix': '레이아웃: ',
   'palette.cmd.projectPrefix': '프로젝트: ',
-  'palette.cmd.projectReview': '프로젝트: wmux.json 검토…',
+  'palette.cmd.projectReview': '프로젝트: fmux.json 검토…',
   'palette.cmd.projectApplyLayout': '프로젝트: 레이아웃 적용',
 
   // Fleet View (S-C1 cockpit)
@@ -121,13 +127,13 @@ export const ko = {
   'fleet.needsYourInput': '입력 대기 중',
   'fleet.jumpHint': '에이전트로 이동',
 
-  // Fleet View — 원격 탭 (LanLink PR-5 읽기 전용 원격 피어 인박스)
+  // Fleet View — Remote tab (LanLink PR-5 read-only remote peer inbox)
   'fleet.remote.empty': '원격 메시지 없음',
   'fleet.remote.peerBadge': '원격 피어',
   'fleet.remote.dismiss': '메시지 닫기',
   'fleet.remote.delDismiss': '닫기',
 
-  // Fleet View — 승인 탭 (S-C2 통합 승인 인박스)
+  // Fleet View — Approvals tab (S-C2 unified approval inbox)
   'fleet.approvals.empty': '대기 중인 승인 없음',
   'fleet.approvals.approve': '승인',
   'fleet.approvals.deny': '거부',
@@ -144,11 +150,11 @@ export const ko = {
   'fleet.approvals.delDeny': '거부',
 
   // Project config (X5 wmux.json)
-  'project.dialogTitle': '프로젝트 설정 (wmux.json)',
+  'project.dialogTitle': '프로젝트 설정 (fmux.json)',
   'project.file': '파일',
-  'project.invalid': '이 wmux.json을 해석할 수 없습니다. JSON을 수정한 뒤 다시 여세요.',
+  'project.invalid': '이 fmux.json을 해석할 수 없습니다. JSON을 수정한 뒤 다시 여세요.',
   'project.untrustedNotice': '이 파일의 커맨드는 신뢰한 뒤에만 실행됩니다. 아래 내용을 검토하세요 — 신뢰는 표시된 내용 그대로를 승인합니다.',
-  'project.staleNotice': '신뢰한 이후 wmux.json이 변경되었습니다. 새 버전을 검토하고 신뢰하기 전까지 아무것도 실행되지 않습니다.',
+  'project.staleNotice': '신뢰한 이후 fmux.json이 변경되었습니다. 새 버전을 검토하고 신뢰하기 전까지 아무것도 실행되지 않습니다.',
   'project.deniedNotice': '이 프로젝트를 거부했습니다. 여기서 신뢰하기 전까지 커맨드와 레이아웃이 비활성 상태로 유지됩니다.',
   'project.commandsHeading': '커스텀 커맨드',
   'project.layoutHeading': '레이아웃 ({count}개 pane)',
@@ -160,8 +166,8 @@ export const ko = {
   'project.notNow': '나중에',
   'project.revoke': '신뢰 철회',
   'project.close': '닫기',
-  'project.badgeTooltip': 'wmux.json — 프로젝트 커맨드·레이아웃',
-  'project.discoveredToast': 'wmux.json 발견 — 사이드바 배지를 클릭해 프로젝트 커맨드를 검토하세요',
+  'project.badgeTooltip': 'fmux.json — 프로젝트 커맨드·레이아웃',
+  'project.discoveredToast': 'fmux.json 발견 — 사이드바 배지를 클릭해 프로젝트 커맨드를 검토하세요',
   'project.supervisionBadge': '↻ 자동 재시작 ({restart}, 연속 {burst}회까지)',
   'project.unattendedHeading': '무인 실행 (재부팅 후 권한 프롬프트 스킵)',
   'project.unattendedConsent': '재부팅 시 이 {count}개 pane을 권한 확인 없이 자동 실행하도록 허용. 각 pane은 마지막 사용 권한 모드로 복원되며, --dangerously-skip-permissions가 포함될 수 있습니다.',
@@ -177,8 +183,8 @@ export const ko = {
   'terminal.staleScreen': '화면이 최신이 아닐 수 있음 — 재시도 예정',
   'retention.migratedNotice': '이번 업데이트부터 숨겨진 패널의 렌더링을 일시정지합니다 (모든 것은 계속 실행되며, 다시 표시될 때 따라잡습니다). Settings → Terminal에서 끌 수 있습니다.',
   'retention.migratedNoticeTurnOff': '끄기',
-  'terminal.supervisedRestart': '[wmux] 감독 재시작 #{count} — 중지: 창 메뉴',
-  'terminal.supervisedRestartExit': '[wmux] 감독 재시작 #{count} (종료 {code}) — 중지: 창 메뉴',
+  'terminal.supervisedRestart': '[fmux] 감독 재시작 #{count} — 중지: 창 메뉴',
+  'terminal.supervisedRestartExit': '[fmux] 감독 재시작 #{count} (종료 {code}) — 중지: 창 메뉴',
   'terminal.copied': '복사됨!',
   'terminal.copyFailed': '복사 실패 — 선택 영역 유지됨',
   'terminal.openPathBlocked': '실행 파일 차단됨 — 부모 폴더만 열림',
@@ -198,12 +204,12 @@ export const ko = {
   'supervision.stop': '감독 중지',
   'supervision.rearm': '감독 재개',
   'supervision.actionFailed': '감독 작업 실패 — 데몬이 오프라인일 수 있습니다',
-  // X6 ② — 복원된 대화형 에이전트 pane의 원클릭 resume pill.
+  // X6 ② — one-click resume pill for restored interactive agent panes.
   'resume.label': '{agent} 이어가기',
   'resume.tooltip': '이 pane의 이전 에이전트 대화를 이어갑니다',
   'resume.dismiss': '닫기',
-  // X6 ③ — 점진 조립: 첫 클릭은 권한 모드를 복원(명령만 입력, Enter 없음),
-  // 이 두 번째 클릭은 정확한 세션 복원을 덧붙입니다. 실행은 사용자가 Enter.
+  // X6 ③ — progressive assembly: first click restores permission mode (types command only, no Enter);
+  // this second click appends exact session restore. User presses Enter to run.
   'resume.addSession': '이 세션 복원',
   'resume.addSessionTooltip': '이전 대화를 정확히 이어가기 (--resume <id>); 실행하려면 Enter',
 
@@ -249,7 +255,7 @@ export const ko = {
   'settings.autoUpdateDesc': '자동으로 업데이트를 확인하고 설치합니다',
   'settings.startup': '시작 프로그램',
   'settings.startOnLogin': 'Windows 시작 시 자동 실행',
-  'settings.startOnLoginDesc': 'Windows에 로그인하면 wmux를 자동으로 실행합니다',
+  'settings.startOnLoginDesc': 'Windows에 로그인하면 Forge Mux를 자동으로 실행합니다',
   'settings.checkUpdate': '업데이트 확인',
   'settings.checking': '확인 중...',
   'settings.upToDate': '최신 버전',
@@ -263,8 +269,8 @@ export const ko = {
   'settings.tabShortcuts': '단축키',
   'settings.tabAgents': '에이전트',
   'settings.tabAbout': '정보',
-  // agent (커맨드 데크 브레인) 설정 — 명칭은 영문 "agent" 고정(번역·한글화
-  // 금지, 오너 결정 2026-07-13: "오케스트레이터"는 한글 UI에서 넘침).
+  // agent (command deck brain) settings — label stays English "agent" (no translation/localization;
+  // owner decision 2026-07-13: "orchestrator" overflows Korean UI).
   'settings.orchestrator': 'agent',
   'settings.orchestratorBrain': 'agent 브레인',
   'settings.orchestratorBrainDesc':
@@ -277,8 +283,8 @@ export const ko = {
   'settings.orchestratorModelDefault': '기본 (구독 기본 모델)',
   'settings.orchestratorFullPower': '풀파워 모드',
   'settings.orchestratorFullPowerDesc':
-    'Claude Code의 스킬·CLAUDE.md·훅을 agent 턴에 로드합니다. 개인 훅이 agent 턴 안에서 실행되고(wmux 샌드박스 밖의 본인 코드), 툴 호출이 느려질 수 있으며, 켜져 있는 동안 agent는 메모리 노트를 쓸 수 없습니다. 다음 agent 턴부터 적용됩니다.',
-  // 워크스페이스별 agent 모드 — 단일 자율성 노브(off/assist/auto).
+    'Claude Code의 스킬·CLAUDE.md·훅을 agent 턴에 로드합니다. 개인 훅이 agent 턴 안에서 실행되고(Forge Mux 샌드박스 밖의 본인 코드), 툴 호출이 느려질 수 있으며, 켜져 있는 동안 agent는 메모리 노트를 쓸 수 없습니다. 다음 agent 턴부터 적용됩니다.',
+  // Per-workspace agent mode — single autonomy knob (off/assist/auto).
   'deck.limit.window': '사용량',
   'deck.limit.resetsSoon': '곧 초기화됨',
   'deck.limit.resetsIn': '{rel} 후 초기화',
@@ -286,18 +292,18 @@ export const ko = {
   'deck.limit.utilSuffix': ' ({util}% 사용)',
   'deck.limit.rejected': '⚠ Claude {window} 한도 도달{on}{reset}. 전환하기 전까지 새 턴은 이 계정을 계속 사용합니다.',
   'deck.limit.approaching': '{window} 한도에 근접{on}{util}{reset}.',
-  // agent 패널에 칩으로 표시.
+  // Shown as chip on agent panel.
   'deck.mode.label': '모드',
   'deck.mode.off': 'Off',
   'deck.mode.offDesc': '자율 동작 없음(기본값). 실행 중인 루프·예약도 정지. 직접 타이핑은 여전히 가능.',
   'deck.mode.assist': 'Assist',
   'deck.mode.assistDesc': 'pane이 입력을 기다릴 때, 또는 실행 중인 루프를 진행할 때만 깨어남. 알림만, 승인은 안 누름.',
-  // `/clear` — 오케 컨텍스트 리셋(대화 기록은 유지).
+  // `/clear` — reset orchestrator context (conversation history preserved).
   'deck.contextCleared': '오케스트레이터 컨텍스트를 지웠습니다 — 다음 턴은 새 대화로 시작합니다.',
   'deck.contextClearFailed': '오케스트레이터 컨텍스트를 지우지 못했습니다.',
-  // Claude Code hook 브리지 설치 유도(실행 시 + 모드 상향 시).
-  'hooks.prompt.title': '정확한 agent 신호를 위해 wmux hook을 설치하세요',
-  'hooks.prompt.body': 'hook이 없으면 wmux는 화면 텍스트를 읽어 agent 완료를 추측합니다 — 완료·승인 신호를 놓칠 수 있습니다. Claude Code 설정에 hook 브리지를 설치하면 신호가 정확해집니다.',
+  // Prompt Claude Code hook bridge install (on run + when raising mode).
+  'hooks.prompt.title': '정확한 agent 신호를 위해 Forge Mux hook을 설치하세요',
+  'hooks.prompt.body': 'hook이 없으면 Forge Mux는 화면 텍스트를 읽어 agent 완료를 추측합니다 — 완료·승인 신호를 놓칠 수 있습니다. Claude Code 설정에 hook 브리지를 설치하면 신호가 정확해집니다.',
   'hooks.prompt.install': 'hook 설치',
   'hooks.prompt.installing': '설치 중…',
   'hooks.prompt.later': '나중에',
@@ -307,15 +313,15 @@ export const ko = {
   'hooks.prompt.close': '닫기',
   'deck.mode.auto': 'Auto (위험)',
   'deck.mode.autoDesc': '모든 agent 이벤트에 깨어나 스스로 판단해 승인까지 누르며 작업을 끝까지 진행.',
-  // 이벤트 자동 깨우기 킬스위치: 끄면 요청하지 않은 자동 요약 턴(토큰 소비)이
-  // 멈춘다. 실행 중인 루프는 계속 깨운다.
+  // Event auto-wake kill switch: off stops unsolicited auto-summary turns (token spend).
+  // Running loops still wake.
   'settings.autoWake': 'pane 이벤트 자동 깨우기',
   'settings.autoWakeDesc':
     'pane이 멈추거나 입력을 기다릴 때 agent를 깨워 요약합니다. 깨울 때마다 토큰을 쓰는 실제 턴이 돌아갑니다 — 요청하지 않은 요약이 싫으면 끄세요. 실행 중인 루프는 꺼도 계속 동작합니다.',
   'settings.channelsTabVisible': '채널 탭 표시',
   'settings.channelsTabVisibleDesc':
     '도크에 채널 탭(사람용 채널 UI)을 표시합니다. 꺼도 에이전트·agent의 채널 통신은 그대로 동작합니다 — 원문을 직접 확인하고 싶을 때만 켜세요.',
-  // LanLink 제어 평면 (PR-3)
+  // LanLink control plane (PR-3)
   'settings.lanlinkTab': 'LanLink',
   'settings.lanlink': 'LanLink (LAN 에이전트 메시징)',
   'settings.lanlinkEnable': 'LanLink 켜기',
@@ -328,8 +334,8 @@ export const ko = {
     '켜면 선택한 인터페이스에서 LAN 포트를 엽니다 — Windows가 허용을 물을 수 있습니다. Private(개인) 네트워크 프로필에서만 동작하며, 공용 네트워크에는 절대 노출되지 않습니다.',
   'settings.lanlinkLoading': 'LanLink 상태 확인 중…',
   'settings.lanlinkApplying': '적용 중…',
-  'settings.lanlinkUnavailable': 'LanLink는 wmux 데몬이 필요합니다 — 로컬 전용 모드에서는 사용할 수 없습니다. 데몬이 연결되면 표시됩니다.',
-  // LanLink 페어링 (PR-5)
+  'settings.lanlinkUnavailable': 'LanLink는 Forge Mux 데몬이 필요합니다 — 로컬 전용 모드에서는 사용할 수 없습니다. 데몬이 연결되면 표시됩니다.',
+  // LanLink pairing (PR-5)
   'settings.lanlinkPair': '페어링',
   'settings.lanlinkPairDisabled': '다른 머신과 페어링하려면 위에서 LanLink를 켜고 네트워크 인터페이스를 선택하세요.',
   'settings.lanlinkPairStart': '이 머신 페어링',
@@ -379,7 +385,7 @@ export const ko = {
   'settings.browserDiscard': '숨은 브라우저 내리기 (메모리 절감)',
   'settings.browserDiscardDesc': '브라우저 패널이 5분 동안 보이지 않으면 완전히 내려 메모리를 회수합니다. 돌아오면 페이지가 다시 로드됩니다(스크롤 위치와 저장하지 않은 입력은 사라집니다). 오디오 재생 중인 패널은 내리지 않으며, 자동화는 내려간 패널을 자동으로 깨웁니다.',
   'settings.updates': '업데이트',
-  'settings.wmuxUpdates': 'wmux 업데이트',
+  'settings.wmuxUpdates': 'Forge Mux 업데이트',
   'settings.updateFailed': '업데이트 확인 실패',
   'settings.lastCheckedNever': '마지막 확인: 없음',
   'settings.installUpdate': '업데이트 설치',
@@ -534,18 +540,18 @@ export const ko = {
 
   // First-run auto-update prompt
   'firstRun.autoUpdateTitle': '자동 업데이트',
-  'firstRun.autoUpdateMessage': 'WMUX가 자동으로 업데이트를 확인하도록 할까요? 나중에 설정에서 변경할 수 있습니다.',
+  'firstRun.autoUpdateMessage': 'Forge Mux가 자동으로 업데이트를 확인하도록 할까요? 나중에 설정에서 변경할 수 있습니다.',
   'firstRun.enable': '사용',
   'firstRun.disable': '사용 안 함',
 
   // First-run wizard (Plan 1.15) — magical-moment onboarding
-  'firstRunWizard.title': 'wmux에 오신 것을 환영합니다',
+  'firstRunWizard.title': 'Forge Mux에 오신 것을 환영합니다',
   'firstRunWizard.subtitle': '첫 매직 모먼트를 설정해 봅시다.',
   'firstRunWizard.claudeDetected': 'Claude Code 감지됨',
   'firstRunWizard.claudeNotDetected': 'Claude Code를 찾을 수 없습니다',
   'firstRunWizard.claudeInstallHint': '샘플 작업을 사용하려면 먼저 Claude Code를 설치하세요.',
-  'firstRunWizard.mcpRegistered': 'wmux MCP 서버: 등록됨',
-  'firstRunWizard.mcpNotRegistered': 'wmux MCP 서버: 미등록',
+  'firstRunWizard.mcpRegistered': 'Forge Mux MCP 서버: 등록됨',
+  'firstRunWizard.mcpNotRegistered': 'Forge Mux MCP 서버: 미등록',
   'firstRunWizard.registerMcpButton': '등록',
   'firstRunWizard.sampleTaskHeading': '샘플 작업 시도',
   'firstRunWizard.sampleTaskDescription': '2x2 분할을 열고 Claude에게 웹 검색을 시켜봅니다.',
@@ -559,7 +565,7 @@ export const ko = {
   // First-run wizard — registerMcp Tier 2 errors (D10, problem / cause / fix)
   'firstRunWizard.error.PERM.problem': '~/.claude.json에 쓸 수 없습니다.',
   'firstRunWizard.error.PERM.cause': '다른 사용자가 소유하거나 권한이 제한되어 있습니다.',
-  'firstRunWizard.error.PERM.fix': '`chmod 600 ~/.claude.json` 후 재시도하거나, `wmux mcp register`로 수동 등록하세요.',
+  'firstRunWizard.error.PERM.fix': '`chmod 600 ~/.claude.json` 후 재시도하거나, `fmux mcp register`로 수동 등록하세요.',
   'firstRunWizard.error.PARSE.problem': '~/.claude.json 파일이 손상되었습니다.',
   'firstRunWizard.error.PARSE.cause': '이전 편집으로 JSON 형식이 잘못되었습니다 (쉼표 누락, 중괄호 불일치 등).',
   'firstRunWizard.error.PARSE.fix': 'JSON을 수동으로 수정하거나 백업 후 Claude Code가 재생성하도록 하세요.',
@@ -568,7 +574,7 @@ export const ko = {
   'firstRunWizard.error.IO.fix': '디스크 공간과 홈 디렉토리 권한을 확인 후 재시도하세요.',
   'firstRunWizard.error.UNKNOWN.problem': '등록에 실패했습니다.',
   'firstRunWizard.error.UNKNOWN.cause': '예상치 못한 오류가 발생했습니다.',
-  'firstRunWizard.error.UNKNOWN.fix': '재시도하거나 터미널에서 `wmux mcp register`를 실행하세요.',
+  'firstRunWizard.error.UNKNOWN.fix': '재시도하거나 터미널에서 `fmux mcp register`를 실행하세요.',
 
   // Onboarding spotlight tour (steps.ts / OnboardingOverlay) — #452
   'onboarding.step1.title': '터미널',
@@ -600,7 +606,7 @@ export const ko = {
   'settings.firstRunSetup.lastCompleted': '마지막 완료: {date}',
   'settings.firstRunSetup.notCompleted': '아직 완료되지 않음',
   'settings.firstRunSetup.claudeStatus': 'Claude Code: {status}',
-  'settings.firstRunSetup.mcpStatus': 'wmux MCP: {status}',
+  'settings.firstRunSetup.mcpStatus': 'Forge Mux MCP: {status}',
   'settings.firstRunSetup.statusDetected': '감지됨',
   'settings.firstRunSetup.statusNotDetected': '감지되지 않음',
   'settings.firstRunSetup.statusRegistered': '등록됨',
@@ -612,12 +618,12 @@ export const ko = {
   'claudeIntegration.tab': 'Claude 연동',
   'claudeIntegration.signalHealth.title': '플러그인 신호 상태',
   'claudeIntegration.signalHealth.unknownBody':
-    '플러그인 상태: 아직 신호가 관측되지 않았습니다. Claude Code에서 아래 명령을 실행해 설치하세요. 첫 hook이 발생하면 wmux가 자동으로 감지합니다.',
+    '플러그인 상태: 아직 신호가 관측되지 않았습니다. Claude Code에서 아래 명령을 실행해 설치하세요. 첫 hook이 발생하면 Forge Mux가 자동으로 감지합니다.',
   'claudeIntegration.signalHealth.detectedLastReceived': '마지막 신호 {rel}.',
   'claudeIntegration.signalHealth.detectedLatencyFormat':
     '지연 P50 {p50}ms · P95 {p95}ms · 샘플 {count}건',
   'claudeIntegration.signalHealth.workspaceMatchFormat':
-    '워크스페이스 매칭: {matched}/{total} hook이 wmux pane으로 해결됨',
+    '워크스페이스 매칭: {matched}/{total} hook이 Forge Mux pane으로 해결됨',
   'claudeIntegration.signalHealth.staleBody':
     '플러그인 상태: 오래됨. 마지막 hook이 {rel}에 도착했습니다 — 플러그인이 멈췄거나 Claude Code가 휴면 상태일 수 있습니다.',
   'claudeIntegration.signalHealth.copyInstallCommand': '설치 명령 복사',
@@ -716,7 +722,7 @@ export const ko = {
   'channels.memberStaleTitle': '에이전트 판이 사라졌거나 재시작 중입니다',
   'channels.joinedToast': '{workspace}을(를) #{channel}에 추가했습니다',
   'channels.daemonStaleBanner':
-    '채널이 업데이트되었지만 백그라운드 데몬이 이전 버전으로 실행 중입니다. wmux를 완전히 종료한 뒤 다시 시작하면 적용됩니다.',
+    '채널이 업데이트되었지만 백그라운드 데몬이 이전 버전으로 실행 중입니다. Forge Mux를 완전히 종료한 뒤 다시 시작하면 적용됩니다.',
   'daemon.replacingToast':
     '백그라운드 데몬을 이 버전으로 업데이트하는 중입니다 — 판이 잠시 멈췄다가 자동으로 복원될 수 있습니다.',
   'channels.alreadyMemberToast': '{workspace}은(는) 이미 #{channel}에 있습니다',
@@ -734,7 +740,7 @@ export const ko = {
   'channels.searchPlaceholder': '메시지 검색…',
   'channels.searchEmpty': '검색과 일치하는 메시지가 없습니다.',
   'channels.archivedReadOnly': '보관된 채널은 읽기 전용입니다.',
-  // W1 (운영자 관전) — 비공개 에이전트 채널 읽기 전용 가시성.
+  // W1 (operator spectate) — read-only visibility into private agent channels.
   'channels.observedBadge': '관전',
   'channels.observedReadOnly': '이 채널을 관전 중입니다 (읽기 전용). 참여하려면 조인하세요.',
   'channels.closeTooltip': '채널 닫기',
@@ -749,16 +755,16 @@ export const ko = {
   'channels.mentionDropped': '이 @멘션은 전달되지 않았습니다(채널 멤버 아님): {names}',
   'channels.mentionUnmatched': '이 @멘션은 일치하는 대상이 없어 전달되지 않았습니다: {names}',
   'channels.mentionNoMatch': '멘션할 에이전트가 없습니다',
-  // Command Deck (Phase 1) — 탭형 도크 + LLM 없는 지휘 composer.
-  // 명명 규칙(오너 결정 2026-07-13 개정): 두뇌/기능 = "agent"(영문 고정, 번역
-  // 안 함 — "오케스트레이터"는 한글 UI에서 넘침), pane 집합 = "에이전트".
-  // "함대(fleet)" 어휘는 사용자 표면에서 쓰지 않는다.
+  // Command Deck (Phase 1) — tabbed dock + non-LLM command composer.
+  // Naming (owner decision 2026-07-13 rev): brain/feature = "agent" (English fixed, no translation —
+  // "orchestrator" overflows Korean UI), pane collection = localized "agents" string key.
+  // Do not use "fleet" vocabulary on user-facing surfaces.
   'deck.tabsAriaLabel': '커맨드 데크 탭',
   'deck.tabCommander': '에이전트',
   'deck.tabChannels': '채널',
   'deck.tabGit': 'Git',
   'deck.tabReview': '리뷰',
-  // Review 탭 — 전 워크스페이스 diff 로스터(P1 2026-07-18).
+  // Review tab — all-workspace diff roster (P1 2026-07-18).
   'review.title': '리뷰',
   'review.dirtySuffix': '변경 있음',
   'review.refresh': '새로고침',
@@ -771,7 +777,7 @@ export const ko = {
   'review.openDiffDesc': '이 워크스페이스로 이동해 diff를 리뷰합니다',
   'review.go': '이동',
   'review.goDesc': '이 워크스페이스로 전환',
-  // Deck Git 탭 — 워크트리 표면(v1).
+  // Deck Git tab — worktree surface (v1).
   'git.worktrees': '워크트리',
   'git.refresh': '새로고침',
   'git.loading': '불러오는 중…',
@@ -789,7 +795,7 @@ export const ko = {
   'git.create': '생성',
   'git.createFailed': '생성 실패',
   'git.newBranchPlaceholder': '새 브랜치 이름…',
-  // Git 탭 — Pull Requests 섹션 (gh CLI).
+  // Git tab — Pull Requests section (gh CLI).
   'git.pullRequests': 'Pull Requests',
   'git.noPrs': '열린 PR이 없습니다.',
   'git.noComments': '코멘트가 없습니다.',
@@ -808,22 +814,22 @@ export const ko = {
   'deck.commanderEmpty':
     'agent에게 에이전트 운영을 맡기거나, @로 에이전트 pane을 멘션해 직접 지시하세요.',
   'deck.jumpToPane': '이 pane으로 이동',
-  // Bridge P2① — agent 스레드 위에 고정되는 에이전트 명단.
+  // Bridge P2① — agent roster pinned above agent thread.
   'deck.fleetLabel': '에이전트',
   'deck.fleetNeedsYou': '{count}개 응답 필요',
   'deck.fleetNeedsInput': '입력 필요',
-  // Bridge P2② — 하단 계기 스트립.
+  // Bridge P2② — bottom instrument strip.
   'strip.running': '{count}개 실행 중',
   'strip.needsYou': '{count}개 응답 필요',
   'strip.needsYouTooltip': '응답이 필요한 pane으로 이동',
-  // 커맨드 데크 Phase 2 — agent 두뇌(Agent SDK).
+  // Command Deck Phase 2 — agent brain (Agent SDK).
   'deck.commander': 'agent',
   'deck.commanderThinking': 'agent가 작업 중…',
   'deck.commanderStop': '중지',
   'deck.commanderUnavailable': 'agent를 사용할 수 없습니다',
   'deck.commanderBusy': '이미 실행 중인 명령이 있습니다.',
   'deck.commanderFailed': '명령을 실행하지 못했습니다.',
-  // 커맨드 데크 P3b — 재부팅 복구 인사 카드.
+  // Command Deck P3b — reboot recovery greeting card.
   'deck.recoveryTitle': '마지막 종료 전 실행 중이던 에이전트 pane {count}개를 복구할 수 있습니다.',
   'deck.recoveryRun': '에이전트 복구',
   'deck.decisionEyebrow': '결정 필요',
@@ -831,8 +837,8 @@ export const ko = {
   'deck.decisionPlaceholder': '답을 입력하세요…',
   'deck.decisionAnswerLabel': '오케스트레이터 결정에 답',
   'deck.recoveryDismiss': '무시',
-  // 커맨드 데크 — 컨트롤 바(Mode·Loop·Schedules)는 각 컴포넌트가 담당.
-  // 커맨드 데크 P3d — agent 예약(재부팅 생존).
+  // Command Deck — control bar (Mode·Loop·Schedules) owned by each component.
+  // Command Deck P3d — agent schedules (survive reboot).
   'deck.schedules': '예약',
   'deck.schedulesEmpty': '예약이 없습니다. 예약은 재부팅 후에도 유지되고, 시간이 되면 agent가 실행합니다.',
   'deck.schedulePromptPlaceholder': 'agent가 무엇을 하면 될까요?',
@@ -848,11 +854,11 @@ export const ko = {
   'deck.scheduleDelete': '삭제',
   'deck.scheduleInvalid': '지시 내용과 유효한 시간을 입력하세요.',
   'deck.scheduleLimit': '예약 개수 한도에 도달했습니다.',
-  // M1.5 — 워크스페이스별 agent: 예약은 워크스페이스에 귀속된다.
+  // M1.5 — per-workspace agent: schedules belong to the workspace.
   'deck.scheduleNoWorkspace': '먼저 워크스페이스를 여세요 — 예약은 워크스페이스에 속합니다.',
   'deck.scheduleNeedsWorkspace': '워크스페이스 지정 필요',
   'deck.scheduleAdoptHere': '이 워크스페이스로',
-  // Loop engineering v1 — 원클릭 루프.
+  // Loop engineering v1 — one-click loop.
   'deck.loop': '루프',
   'deck.loopStartChip': '루프',
   'deck.loopPaused': '일시정지',
@@ -881,7 +887,7 @@ export const ko = {
   'deck.loopNoWorkspace': '먼저 워크스페이스를 여세요 — 루프는 워크스페이스에 속합니다.',
   'deck.loopNeedsObjective': '루프의 목표를 입력하세요.',
   'deck.loopStartFailed': '루프를 시작하지 못했습니다.',
-  // 루프 설정 모달(인라인 폼이 도크 폭에서 넘쳐 오버레이로 승격).
+  // Loop settings modal (inline form overflows dock width → promoted to overlay).
   'deck.loopModalTitle': '루프 시작',
   'deck.loopModalClose': '닫기',
   'deck.loopObjective': '목표',
@@ -899,29 +905,29 @@ export const ko = {
   'deck.wokenByEvents': '에이전트 이벤트로 깨어남',
   'deck.wokenShow': '자세히',
   'deck.wokenHide': '접기',
-  // operator-join (설계 §3) — 접힘 기본 발견 섹션 + join 확인 다이얼로그. 이 접힘이
-  // 의도 게이트다: 펼치기 전에는 비공개 채널명이 화면에 존재하지 않는다.
+  // operator-join (design §3) — collapsed-by-default discovery section + join confirm dialog.
+  // Collapse is the intent gate: private channel names do not exist on screen until expanded.
   'channels.operatorSection': '모든 채널',
   'channels.operatorLocked': '비공개 채널 — 참여하면 읽을 수 있습니다',
   'channels.operatorArchivedCannotJoin': '보관됨 — 참여할 수 없습니다',
   'channels.operatorJoinConfirmTitle': '이 채널에 참여할까요?',
-  // 두 문장. 두 번째 문장은 §2.1.1 계약을 그대로 진술한다(내구 기록 append + 멤버
-  // 전원에게 표시) — 삭제 금지.
+  // Two sentences. Second sentence states §2.1.1 contract verbatim (durable record append + shown
+  // to all members) — do not delete.
   'channels.operatorJoinConfirmBody':
     '이 채널은 에이전트들이 만든 비공개 채널입니다. 참여하면 채널에 기록이 남고 멤버 전원에게 표시됩니다.',
   'channels.operatorJoinConfirmCta': '참여',
   'channels.operatorJoinCancel': '취소',
   'channels.operatorJoinedToast': '#{channel}에 참여했습니다',
   'channels.operatorJoinFailedToast': '#{channel}에 참여하지 못했습니다',
-  // 서버-발행 operator-join 시스템 메시지의 표시 문자열. 모든 멤버 뷰에
-  // 동일하게 렌더되므로 2인칭이 아닌 시점 중립 문구를 쓴다.
+  // Display string for server-published operator-join system message. Point-neutral wording
+  // (not second person) because all member views render it identically.
   'channels.systemOperatorJoin': '오퍼레이터가 이 채널에 참여했습니다',
-  // J4 — diff 코멘트를 미션 채널에 발사. {count} = @멘션된 태스크 에이전트 수
-  // (에이전트가 전원 채널을 떠났으면 0).
+  // J4 — fire diff comment to mission channel. {count} = @mentioned task agents
+  // (0 if agents left the channel).
   'diff.commentFired': '코멘트를 미션 채널에 발사했습니다 — {count}개 에이전트 호출',
-  // 워크스페이스 git diff — 팔레트 진입 거부: 활성 pane cwd가 git repo가 아님.
+  // Workspace git diff — palette entry denied: active pane cwd is not a git repo.
   'diff.noRepo': 'git 저장소가 아닙니다 — repo 안의 pane에서 실행하세요',
-  // diff → agent 질문 (컨텍스트 블록 + 질문 단일 메시지).
+  // diff → agent question (context block + question as single message).
   'diff.ask': '질문',
   'diff.askOrchestrator': '이 hunk에 대해 agent에게 질문',
   'diff.askPrompt': 'agent에게 질문 (hunk 컨텍스트는 자동 첨부됩니다):',

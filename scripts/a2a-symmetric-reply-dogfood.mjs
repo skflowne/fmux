@@ -15,7 +15,7 @@
  *           REJECTED; from the ADDRESSED pane it is allowed.
  *   xws   — from-pane capture + reply role are preserved across workspaces.
  *
- * Single ISOLATED packaged instance (out/wmux-win32-x64/wmux.exe + a unique
+ * Single ISOLATED packaged instance (helpers/packaged-app.mjs + a unique
  * WMUX_DATA_SUFFIX so it never touches the user's real wmux). Drives the pure
  * main-pipe RPC (clientName omitted → grandfather).
  *
@@ -28,10 +28,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import {
+  EXECUTABLE_NAME,
+  authTokenPath as appAuthTokenPath,
+  userDataDir as appUserDataDir,
+  mainPipeName,
+  packagedAppExe,
+} from './helpers/packaged-app.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
-const APP_EXE = path.join(REPO_ROOT, 'out', 'wmux-win32-x64', 'wmux.exe');
+const APP_EXE = packagedAppExe();
 const USERNAME = os.userInfo().username || 'default';
 
 const results = [];
@@ -47,7 +54,7 @@ if (process.platform !== 'win32') { console.log('a2a-symmetric-reply-dogfood: SK
 if (!fs.existsSync(APP_EXE)) { console.error(`packaged exe not found: ${APP_EXE} — run \`npm run package\` first`); process.exit(2); }
 
 const suffix = `-symreplydog${process.pid}`;
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'wmux-symreplydog-'));
+const home = fs.mkdtempSync(path.join(os.tmpdir(), `${EXECUTABLE_NAME}-symreplydog-`));
 const env = {
   ...process.env,
   USERPROFILE: home, HOME: home,
@@ -58,12 +65,12 @@ const env = {
 delete env.HOMEDRIVE; delete env.HOMEPATH;
 fs.mkdirSync(env.APPDATA, { recursive: true });
 fs.mkdirSync(env.LOCALAPPDATA, { recursive: true });
-const userDataDir = path.join(env.APPDATA, `wmux${suffix}`);
+const userDataDir = appUserDataDir(env.APPDATA, suffix);
 fs.mkdirSync(userDataDir, { recursive: true });
 fs.writeFileSync(path.join(userDataDir, '.first-run'), new Date().toISOString(), 'utf8');
 
-const mainPipe = `\\\\.\\pipe\\wmux${suffix}-${USERNAME}`;
-const authTokenPath = path.join(home, `.wmux${suffix}-auth-token`);
+const mainPipe = mainPipeName(suffix, USERNAME);
+const authTokenPath = appAuthTokenPath(home, suffix);
 
 function readMainToken() { try { return fs.readFileSync(authTokenPath, 'utf8').trim() || null; } catch { return null; } }
 
@@ -208,9 +215,10 @@ async function main() {
   check('P0/A5: task transitioned to working', task1c?.status?.state === 'working', `state=${task1c?.status?.state}`);
 
   // ── P2: a status update from a SIBLING pane (A, not the addressed B) is rejected ──
-  // 완료증거 게이트(PR-B)는 pane-authz 뒤에 온다. 순서 고정(리뷰 GLM): 일부러 evidence
-  // 없이 보낸다 — pane-authz가 먼저면 'addressed receiver pane', 게이트가 먼저로
-  // 회귀하면 'completion_evidence_missing'이 나와 아래 어서션이 실패한다.
+  // Completion evidence gate (PR-B) runs after pane-authz. Order pinned (review GLM):
+  // deliberately send without evidence — if pane-authz runs first, 'addressed receiver pane';
+  // if the gate regresses to run first, 'completion_evidence_missing' appears and the
+  // assertion below fails.
   const u2 = sendResp(await rpcCall('a2a.task.update', {
     workspaceId: ws1, taskId: t1.taskId, status: 'completed', senderPtyId: surfA.ptyId,
   }));
@@ -220,7 +228,7 @@ async function main() {
   check('P2: task still working after the rejected sibling update', task1c2?.status?.state === 'working', `state=${task1c2?.status?.state}`);
 
   // ── P2: a status update from the ADDRESSED pane (B) is allowed ──
-  // 완료증거 게이트(PR-B) 활성 — completed는 구조화 증거 필수. 컴플라이언트 증거 첨부.
+  // Completion evidence gate (PR-B) active — completed requires structured evidence. Attach compliant evidence.
   const u3 = sendResp(await rpcCall('a2a.task.update', {
     workspaceId: ws1, taskId: t1.taskId, status: 'completed', senderPtyId: surfB.ptyId,
     evidence: { summary: 'dogfood completion', items: [{ kind: 'inspection', status: 'unverified', summary: 'symmetric-reply dogfood transition' }] },

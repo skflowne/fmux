@@ -62,10 +62,10 @@ describe('parseNulList — NUL(-z)-separated parser', () => {
 });
 
 describe('isIntegrationPath — prefix recognition', () => {
-  it('recognizes only a .wmux-merge- prefixed leaf as an integration path', () => {
-    expect(isIntegrationPath('/x/repo-worktrees/.wmux-merge-feat')).toBe(true);
+  it('recognizes only a .fmux-merge- prefixed leaf as an integration path', () => {
+    expect(isIntegrationPath('/x/repo-worktrees/.fmux-merge-feat')).toBe(true);
     expect(isIntegrationPath('/x/repo-worktrees/feat')).toBe(false);
-    expect(isIntegrationPath('/x/repo-worktrees/.wmux-merge-feat/')).toBe(true); // trailing slash
+    expect(isIntegrationPath('/x/repo-worktrees/.fmux-merge-feat/')).toBe(true); // trailing slash
   });
 });
 
@@ -315,7 +315,7 @@ describe('clean merge → Land round-trip', () => {
       sourceOid: featOid,
     });
     expect(landed.ok).toBe(false);
-    if (!landed.ok) expect(landed.error).toContain('이동');
+    if (!landed.ok) expect(landed.error).toContain('moved');
 
     await abortIntegrationMerge(created.path);
     await removeIntegrationWorktree(scn.repo, created.path);

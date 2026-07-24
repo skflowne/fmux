@@ -48,7 +48,7 @@ export function isFreshWorkspace(ws: Workspace): boolean {
 }
 
 /**
- * Auto-apply policy ("이 repo 열면 자동 배치"): trusted + has layout + fresh
+ * Auto-apply policy ("auto-layout when this repo opens"): trusted + has layout + fresh
  * workspace + not yet attempted this run. Replaced PTYs are disposed here
  * (the slice stays electronAPI-free). Returns true when a layout was applied.
  */
@@ -91,7 +91,7 @@ export function applyProjectLayoutNow(workspaceId: string): boolean {
 export async function applyProjectLayoutFresh(workspaceId: string): Promise<boolean> {
   const fresh = await probeProjectConfig(workspaceId);
   if (fresh?.trust !== 'trusted') {
-    useStore.getState().pushToast({ level: 'warn', message: 'wmux.json changed or is no longer trusted — review it from the sidebar badge' });
+    useStore.getState().pushToast({ level: 'warn', message: 'fmux.json changed or is no longer trusted — review it from the sidebar badge' });
     return false;
   }
   return applyProjectLayoutNow(workspaceId);

@@ -108,7 +108,7 @@ function readLastAssistantMessageSafely(
  */
 function writeMainResumeSpool(ptyId: string, binding: ResumeBinding): void {
   try {
-    const dir = path.join(os.homedir(), `.wmux${dataSuffix()}`, 'resume-spool');
+    const dir = path.join(os.homedir(), `.fmux${dataSuffix()}`, 'resume-spool');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const safe = String(ptyId).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
     if (!safe) return;

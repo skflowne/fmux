@@ -8,8 +8,9 @@ import type { DaemonSession, DaemonSessionState, DaemonSessionSupervision, Daemo
 import { RingBuffer } from './RingBuffer';
 import { DaemonPTYBridge } from './DaemonPTYBridge';
 import { PromptEventLog } from './PromptEventLog';
-import { buildSpawnInjection, classifyShell } from './shell-integration';
+import { buildSpawnInjection, classifyShell, installShellIntegration } from './shell-integration';
 import { expandTilde } from '../shared/expandTilde';
+import { applyWslPromptIntegration, isWslShell, splitWslCwd } from '../shared/wslCwd';
 import { buildExecArgs } from './execWrapper';
 import { buildSafeChildEnv } from '../shared/envFilter';
 import { isMac } from '../shared/platform';
@@ -242,7 +243,7 @@ export class DaemonSessionManager extends EventEmitter {
     if (liveCount >= maxSessions) {
       throw new Error(
         `Cannot create new terminal: ${maxSessions} active sessions already running. ` +
-          `Close some panes (or restart wmux) and try again.`,
+          `Close some panes (or restart Forge Mux) and try again.`,
       );
     }
 
@@ -286,7 +287,7 @@ export class DaemonSessionManager extends EventEmitter {
     // pre-fix contaminated blobs are accepted rather than migrated (re-deriving
     // identity on replay would need session→workspace/surface plumbing the
     // daemon deliberately does not have).
-    const env = params.env
+    let env = params.env
       ? stripReservedAuth(params.env)
       : stripReservedNamespace(buildSafeChildEnv(globalThis.process.env));
 
@@ -343,22 +344,31 @@ export class DaemonSessionManager extends EventEmitter {
       }
       spawnArgs = execArgs;
     } else {
-      // Shell integration: dot-source our OSC 133 init script when the shell
-      // is a supported family (pwsh/bash). Unknown shells (cmd.exe, zsh, etc.)
-      // get a plain spawn with no args and silently skip integration.
+      // Shell integration: dot-source our OSC 133 + OSC 7 init script when the
+      // shell is a supported family (pwsh/bash/zsh), or hook cmd.exe's PROMPT.
+      // wsl.exe is a launcher, not a shell. Its in-guest dispatcher loads the
+      // Bash rcfile only when Bash is the user's login shell; other shells are
+      // exec'd unchanged and retain prompt-scraping fallback behavior.
       try {
-        const injection = buildSpawnInjection(cmd);
+        const wslShell = isWslShell(cmd);
+        const injection = wslShell
+          ? applyWslPromptIntegration(cmd, env, installShellIntegration().bash)
+          : buildSpawnInjection(cmd);
         if (injection) {
-          // zsh ZDOTDIR 가로채기: injection이 ZDOTDIR을 wmux 디렉토리로 덮어쓰기
-          // 전에, 사용자의 원래 ZDOTDIR(없으면 HOME)을 WMUX_USER_ZDOTDIR로 보존한다.
-          // stub .zshenv/.zshrc가 이 값으로 사용자 설정을 복원하므로, 보존을
-          // 빠뜨리면 사용자 .zshrc(PATH/alias 등)가 통째로 날아간다.
+          // zsh ZDOTDIR hijack: before injection overwrites ZDOTDIR with the wmux
+          // directory, preserve the user's original ZDOTDIR (or HOME) as
+          // WMUX_USER_ZDOTDIR. Stub .zshenv/.zshrc restores user config from this
+          // value — omitting preservation drops the user's .zshrc (PATH/alias etc.).
           if (classifyShell(cmd) === 'zsh' && !env['WMUX_USER_ZDOTDIR']) {
             env['WMUX_USER_ZDOTDIR'] = env['ZDOTDIR'] || env['HOME'] || os.homedir();
           }
           spawnArgs = injection.args;
-          for (const [k, v] of Object.entries(injection.env)) {
-            env[k] = v;
+          if (wslShell) {
+            env = injection.env;
+          } else {
+            for (const [k, v] of Object.entries(injection.env)) {
+              env[k] = v;
+            }
           }
         }
       } catch (err) {
@@ -366,6 +376,26 @@ export class DaemonSessionManager extends EventEmitter {
         // eslint-disable-next-line no-console
         console.warn('[DaemonSessionManager] shell integration unavailable:', err);
       }
+    }
+
+    // Track B (WSL/Ubuntu cwd): when `cmd` is wsl.exe and `cwd` is a
+    // Linux-style path (or `\\wsl$\...`/`\\wsl.localhost\...` UNC), node-pty
+    // cannot use it as the spawn cwd — ConPTY/CreateProcess only resolve
+    // Windows paths. Give node-pty a safe Windows cwd (this daemon's own
+    // home) and let `wsl.exe --cd <linuxpath>` do the actual positioning
+    // instead (see wslCwd.ts). Skipped on the exec path — its spawnArgs are
+    // an already-finalized wrapper-shell invocation of the caller's command,
+    // and prepending `--cd` would corrupt that argv rather than the shell's.
+    //
+    // IMPORTANT: this only changes what node-pty spawns with. `cwd` itself
+    // (used for `meta.cwd` below) is left untouched — it must stay the
+    // ORIGINAL Linux path so a recovery replay re-derives the identical
+    // split from createSession's own params.cwd, with no new persisted field.
+    let spawnCwd = cwd;
+    if (!params.exec) {
+      const wslSplit = splitWslCwd(cmd, cwd, os.homedir());
+      spawnCwd = wslSplit.spawnCwd ?? cwd;
+      spawnArgs = [...wslSplit.prefixArgs, ...spawnArgs];
     }
 
     // Spawn the PTY. node-pty throws synchronously on a missing/invalid shell
@@ -379,7 +409,7 @@ export class DaemonSessionManager extends EventEmitter {
         name: 'xterm-256color',
         cols,
         rows,
-        cwd,
+        cwd: spawnCwd,
         env,
         useConpty: true,
       });

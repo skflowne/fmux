@@ -11,7 +11,7 @@
 // This script:
 //   1. Parses the LAST argv as the Codex notify JSON payload.
 //   2. Builds the canonical AgentSignal envelope (agent:'codex', kind:'agent.stop').
-//   3. Reads the wmux auth token from ~/.wmux-auth-token.
+//   3. Reads the wmux auth token from ~/.fmux-auth-token.
 //   4. Sends RPC hooks.signal to the wmux main-process pipe (main builds the
 //      resume binding from signal.agent + agentSessionId + cwd + transcript_path
 //      and relays daemon.setResumeBinding — see src/main/pipe/handlers/hooks.rpc.ts,
@@ -45,26 +45,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function getAuthTokenPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  return join(home, '.wmux-auth-token');
+  return join(home, '.fmux-auth-token');
 }
 
 function getPipeName() {
   // WMUX_PIPE_NAME override: for the isolated capture probe
   // (scripts/codex-resume-capture-probe.mjs) and advanced multi-instance setups.
   // Not a security widening — a same-user process can already read the auth
-  // token from ~/.wmux-auth-token, so redirecting the pipe grants nothing new.
+  // token from ~/.fmux-auth-token, so redirecting the pipe grants nothing new.
   const override = process.env.WMUX_PIPE_NAME;
   if (typeof override === 'string' && override.length > 0) return override;
   if (process.platform === 'win32') {
     const username = userInfo().username || 'default';
-    return `\\\\.\\pipe\\wmux-${username}`;
+    return `\\\\.\\pipe\\fmux-${username}`;
   }
-  return join(homedir() || '/tmp', '.wmux.sock');
+  return join(homedir() || '/tmp', '.fmux.sock');
 }
 
 function getLogPath() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  const dir = join(home, '.wmux');
+  const dir = join(home, '.fmux');
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch { /* appendFileSync below also fails → swallowed */ }
@@ -92,7 +92,7 @@ function logEvent(outcome, extra) {
 // WMUX_* var the pane env strips).
 function getResumeSpoolDir() {
   const home = process.env.USERPROFILE || process.env.HOME || homedir();
-  const dir = join(home, '.wmux', 'resume-spool');
+  const dir = join(home, '.fmux', 'resume-spool');
   try {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch { /* writeFileSync below throws + is swallowed */ }
