@@ -55,7 +55,7 @@ export type AgentSlug = 'claude' | 'codex' | 'gemini' | 'aider' | 'opencode' | '
  *      shared-cwd cases that workspaceId+cwd alone collapse (every pane's
  *      hook would otherwise route to the workspace's active surface).
  *   2. `workspaceId` (from WMUX_WORKSPACE_ID env, set by wmux PTYManager)
- *      — strong signal. When the user runs Claude inside a wmux pane,
+ *      — strong signal. When the user runs Claude inside a Forge Mux pane,
  *      the env propagates through Claude Code's subprocess spawn and
  *      lands here. Deterministic regardless of cwd overlap between
  *      workspaces, but resolves only to the workspace's active surface.
@@ -85,7 +85,7 @@ export interface AgentSignal {
   kind: AgentSignalKind;
   agent: AgentSlug;
   agentSessionId?: string;
-  /** WMUX_WORKSPACE_ID env value when the bridge runs inside a wmux pane. */
+  /** WMUX_WORKSPACE_ID env value when the bridge runs inside a Forge Mux pane. */
   workspaceId?: string;
   /** WMUX_SURFACE_ID env value. Refines workspaceId for multi-surface workspaces. */
   surfaceId?: string;
@@ -110,7 +110,7 @@ export interface AgentSignal {
  */
 export interface HookSignalResponse {
   ok: boolean;
-  /** Reason hint when ok=false. Logged by the bridge to ~/.wmux/bridge.log. */
+  /** Reason hint when ok=false. Logged by the bridge to ~/.fmux/bridge.log. */
   reason?:
     | 'no-workspace-match'
     | 'auth-rejected'
