@@ -33,6 +33,20 @@ points per screen, no washes), typography, and aesthetic direction are
 defined there. Do not deviate without explicit user approval.
 In QA/design-review mode, flag any code that doesn't match DESIGN.md.
 
+## Debugging the running app
+
+Renderer bugs that depend on real layout or real terminal state cannot be
+reproduced in vitest/jsdom — xterm sizes its scrollbar from live render
+dimensions and buffer line counts, so a unit test can only assert the logic you
+already believe. Read the running app instead: every launch opens a CDP port
+(random, 18800-18899), and `docs/internal/debugging-live-renderer.md` covers
+finding the instance, evaluating in the renderer, reaching the xterm `Terminal`
+instances through the React fiber, and the traps (alternate-buffer writes,
+hidden zero-height panes, Monaco pointer capture).
+
+Confirm a root cause against live state before changing code whenever the
+symptom is layout- or terminal-state dependent.
+
 ## Versioning & release (owner decision, 2026-07-05)
 
 - **PRs never bump the version.** `package.json` stays at the last released
@@ -57,6 +71,13 @@ In QA/design-review mode, flag any code that doesn't match DESIGN.md.
   commits directly to it.
 - `develop` is the long-lived integration branch. Rebase it onto `origin/main`,
   resolve conflicts there, and verify it before promoting changes.
+- **`develop` is the fork's default branch (owner decision, 2026-07-26).** Open
+  PRs against it — that is where all fork work lands, and what a fresh clone
+  checks out. It is also what makes `Fixes #N` work: GitHub honours closing
+  keywords only on the default branch, so before this change every PR merged
+  into `develop` left its issue open. `main` is not "the branch that releases" —
+  `release.yml` is `on: push: tags: ['v*']`, so a push to `main` builds nothing
+  and only an annotated `v*` tag cuts a release.
 - For a fork release, rebase `main` onto the same upstream base and squash merge
   the verified `develop` delta into `main`. Do not cherry-pick its history.
 - Keep `develop`; feature branches may be deleted after their integrated work is
@@ -112,6 +133,18 @@ wording or symbol renames.
   never push there. `fork` is `github.com/skflowne/fmux`, the repository
   Forge Mux ships from. Upstream syncs rewrite `main`, so pushing `main`
   to `fork` uses `--force-with-lease`.
+- **All GitHub work means the fork.** "Create an issue", "review PR 14",
+  "open a PR" and the like always refer to `skflowne/fmux` unless the owner
+  explicitly says upstream. Never open an issue or PR against
+  `openwong2kim/wmux` — access there is read-only tracking.
+- **Every clone must run `gh repo set-default skflowne/fmux`** — per-clone
+  config like `tagOpt` above, so it cannot be versioned into the repo. Without
+  it `gh` resolves a bare command against `origin`, i.e. upstream, and the
+  numbering collides silently: `gh pr view 14` returns upstream wmux's PR 14, a
+  different and unrelated change, with nothing to signal the wrong repository.
+  With it set, bare `gh` commands are correct and need no `--repo`. Confirm with
+  `gh repo set-default --view`; only in a clone where you have not confirmed it
+  should you pass `--repo skflowne/fmux` explicitly.
 - Forge Mux versioning restarts at **1.0.0**, and the fork's `v*` tag
   namespace belongs to fmux releases only. The inherited wmux tags
   (`v1.0.1`–`v3.31.0`) were purged from the fork remote and the local
