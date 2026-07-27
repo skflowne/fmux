@@ -147,10 +147,31 @@ What we do not consider a wmux security issue:
 
 ---
 
-## 6. Change log
+## 6. Proposing a new security control
+
+This section binds anyone — contributor, reviewer, auditor, or AI agent — proposing to *add* a guard: a blocklist, an allowlist, a path check, a validation gate, a permission check. It exists because §0 and §3 commit this project to a narrow posture, and a control added without evidence quietly widens that posture into something the substrate cannot actually honour.
+
+**A proposal must arrive with two things, in the same document or comment that raises it.**
+
+1. **The callers.** Every call site of the thing being guarded, and what each one actually passes — not what the API signature permits, but what real code supplies. If nothing calls it, say so and stop: the answer is deletion, not hardening.
+2. **The impact, concretely.** Who is stopped, from doing what, that they could not otherwise do. Name the actor, the path they lose, and the paths they keep. *"Defence in depth"* is not an impact statement.
+
+**Then check whether something already open defeats it.** If the actor can reach the same data through an unguarded channel — a pane they can already type into, a process-spawn API, direct disk access as the same user — the control stops nothing, and saying so is more useful than shipping it. This is the common case here: the substrate runs arbitrary shells by design, so most read-path guards can be walked around.
+
+**Check this document first.** A mitigation for a threat listed in §3 is not a finding. It contradicts the stated posture, and belongs either in the bin or in a proposal to change §0 and §3 — a much larger conversation than adding a check.
+
+**State the cost.** A guard that blocks a legitimate user action, fails silently, or makes two code paths disagree has a real price, paid by users who did nothing wrong. Weigh it against the demonstrated impact. Where the impact is unproven, do not propose the guard at all.
+
+> **Worked example.** The `fs.handler` blocklist that refused to list `~/.ssh` failed every test above: no caller ever passed an arbitrary path, a compromised renderer could call `pty:create` and spawn a shell regardless, and §3 already declares same-user disclosure out of scope. Its cost was a silently empty file explorer for anyone who legitimately `cd`'d into a credential directory. See [#48](https://github.com/skflowne/fmux/issues/48).
+
+Controls that *do* clear this bar are welcome; §1 is where they land once they are real.
+
+---
+
+## 7. Change log
 
 | Date | Change |
 |---|---|
-| 2026-07-27 | Forge Mux fork audit. (a) §5 was directing vulnerability reports to the upstream wmux repository, which this fork does not control — now routed to `skflowne/fmux`. (b) On-disk paths corrected from `~/.wmux/` to the `~/.fmux/` namespace this fork actually uses (`shared/constants.ts`); the 2026-05-16 row below is left as written, being a record of what happened upstream at the time. (c) Per-plugin permission enforcement moved out of §1 "guarantees" into §2.5 "declared but not guaranteed" — it was listed among commitments whose regressions are bugs while enforcement is incomplete, and cited `plans/generic-wandering-teapot.md`, which does not exist in this repository. Old §1.4 renumbered to §1.3. (d) §1.2 split into subsections; no technical claim changed. (e) §3 now states explicitly that the same-user carve-out is why the app ships no path blocklists on its own read APIs. |
+| 2026-07-27 | Forge Mux fork audit. (a) §5 was directing vulnerability reports to the upstream wmux repository, which this fork does not control — now routed to `skflowne/fmux`. (b) On-disk paths corrected from `~/.wmux/` to the `~/.fmux/` namespace this fork actually uses (`shared/constants.ts`); the 2026-05-16 row below is left as written, being a record of what happened upstream at the time. (c) Per-plugin permission enforcement moved out of §1 "guarantees" into §2.5 "declared but not guaranteed" — it was listed among commitments whose regressions are bugs while enforcement is incomplete, and cited `plans/generic-wandering-teapot.md`, which does not exist in this repository. Old §1.4 renumbered to §1.3. (d) §1.2 split into subsections; no technical claim changed. (e) §3 now states explicitly that the same-user carve-out is why the app ships no path blocklists on its own read APIs. (f) Added §6, the evidence bar a proposed security control must clear — callers, concrete impact, and a check against §3 — so this document governs what gets added to it. Change log renumbered to §7. |
 | 2026-05-16 | Initial draft (#41). Declared icacls + attrib + notice-file hardening signals + `mcp.claimWorkspace` enforcement. |
 | 2026-05-16 | Reverted icacls/attrib/notice-file claims (§1.2 and §1.3 of the original draft). Dogfood on a real `%USERPROFILE%\.wmux\` directory produced a broken ACL state (`/inheritance:r` removed the owner's WRITE_DAC, and the subsequent `/grant:r` failed silently). The dynamic test (`scripts/substrate-hardening-dynamic.mjs`) had passed on a fresh `mkdtempSync` directory whose ACL constitution is different from a long-lived profile-scoped folder; the test did not catch the production-only regression. Phase 3.2 hardening will be re-attempted only after a hardening helper that (a) grants the owner explicit `(OI)(CI)F` *before* removing inherited ACEs and (b) is dogfooded against a real user profile passes. |
