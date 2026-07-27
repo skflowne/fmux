@@ -287,6 +287,28 @@ describe('git:status — through the location execution API', () => {
     expect(execFileAsync).not.toHaveBeenCalled();
   });
 
+  it('refuses a WSL location it cannot canonicalise, rather than running git in the guest', async () => {
+    // The consequential half of failing closed, pinned because it is a real
+    // trade and not an oversight. git would have SUCCEEDED here: the command
+    // runs inside the distro and never touches the share. What fails is the
+    // host's canonicalisation of `\\wsl.localhost\...`, and the gate treats
+    // "could not look" as "not cleared".
+    //
+    // The alternative — canonicalising only where the host is authoritative —
+    // would refuse to LIST a guest symlink into `~/.ssh` (fs.readDir realpaths
+    // the same UNC) while running git inside it. A refusal bypass is worse
+    // than a refusal that is occasionally too eager, and both channels now
+    // degrade together instead of disagreeing.
+    realpathSpy.mockRejectedValue(new Error('ENOENT') as never);
+    const location: SessionLocation = {
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    };
+    livePane('pty-1', location);
+
+    await expect(gitStatus()(fakeEvent, location)).resolves.toBe('');
+    expect(execFileAsync).not.toHaveBeenCalled();
+  });
+
   it('leaves an unconvertible guest path to the execution API, not to this gate', async () => {
     // `toHostAccessiblePath` fails for a distro-less WSL location, so there is
     // no host spelling to resolve or canonicalise. That is not a refusal by the

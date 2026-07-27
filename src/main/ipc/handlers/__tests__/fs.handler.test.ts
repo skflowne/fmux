@@ -288,6 +288,23 @@ describe('refusesSensitivePath', () => {
     ).resolves.toBe(true);
   });
 
+  // A rooted backslash path is Windows-shaped only by virtue of running on
+  // Windows — it carries neither a drive letter nor a UNC prefix — so this is
+  // the one case the shape sniff alone would get wrong, and the one the
+  // platform disjunct exists for. Windows-only by nature: the same string is a
+  // legal single-segment filename on Linux.
+  it.runIf(process.platform === 'win32')(
+    'collapses a rooted backslash path where the host is what makes it Windows-shaped',
+    async () => {
+      const drive = path.win32.resolve('\\').slice(0, 2);
+      vi.spyOn(os, 'homedir').mockReturnValue(`${drive}\\Users\\tester`);
+
+      await expect(refusesSensitivePath(
+        { domain: 'host', cwd: '\\Users\\tester\\proj\\..\\.ssh', shell: '' },
+      )).resolves.toBe(true);
+    },
+  );
+
   it('does not refuse a guest path that has no host spelling', async () => {
     // Unconvertible is not sensitive. The raw pass already cleared the cwd, and
     // whether a distro-less WSL location may run anything is the execution
