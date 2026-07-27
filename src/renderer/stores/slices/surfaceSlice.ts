@@ -8,7 +8,7 @@ import { clearNudgesFor } from '../../hooks/channelMentionRateLimit';
 import { saveSessionNow } from '../../utils/sessionSaveBridge';
 import { resolveSessionLocation } from '../../../shared/sessionLocation';
 import type { SessionLocation, SessionLocationSnapshot } from '../../../shared/sessionLocation';
-import { sessionLocationForSurface } from '../../utils/focusedSurface';
+import { sessionLocationForPane } from '../../utils/focusedSurface';
 import {
   beginSessionLocationProjection,
   forgetSessionLocation,
@@ -154,14 +154,18 @@ export const createSurfaceSlice: StateCreator<StoreState, [['zustand/immer', nev
       return;
     }
     const fileName = filePath.split(/[/\\]/).pop() || filePath;
-    // Sole owner of an editor surface's location. The surface itself has no
+    // Sole owner of WHICH MACHINE THIS FILE IS ON. The surface itself has no
     // cwd and no shell, so nothing downstream can derive one — the render tree
     // used to guess from an arbitrary sibling terminal on every paint, in two
     // places. Openers that already know the location (file tree, explorer
     // popover) pass it; anyone else gets it resolved from this pane's own
     // terminal once, here.
+    //
+    // Frozen on purpose, and NOT a working location (issue #46): the file stays
+    // on the machine it was opened from when the pane's terminal moves. What
+    // publishes "where the user is working" is the pane — `sessionLocationForPane`.
     const resolved = location
-      ?? sessionLocationForSurface(pane.surfaces.find((s) => s.cwd))
+      ?? sessionLocationForPane(pane)
       ?? undefined;
     const surface: Surface = {
       id: generateId('surface'),

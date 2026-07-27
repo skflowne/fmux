@@ -487,6 +487,29 @@ describe('surfaceSlice.addEditorSurface — the location is owned at creation', 
     });
   });
 
+  // Issue #46 — the seed comes through the pane's ONE published-location door,
+  // so it follows that door's precedence: the pane's active terminal, not
+  // whichever terminal sits first in tab order. Both production callers pass an
+  // explicit location, so this rule is only reachable through the fallback —
+  // pinned here because it is the fallback's whole contract.
+  it('seeds from the pane active terminal, not its first', () => {
+    const { state, slice } = createHarness();
+    const paneId = state.workspaces[0].rootPane.id;
+    slice.addSurface(paneId, 'pty-1', 'pwsh.exe', 'C:\\dev\\first');
+    slice.addSurface(paneId, 'pty-2', 'pwsh.exe', 'C:\\dev\\second');
+
+    slice.addEditorSurface(paneId, 'C:\\dev\\second\\README.md');
+
+    const pane = state.workspaces[0].rootPane;
+    if (pane.type !== 'leaf') throw new Error('expected leaf pane');
+    const editor = pane.surfaces.find((s) => s.surfaceType === 'editor')!;
+    expect(editor.location).toEqual({
+      domain: 'host',
+      cwd: 'C:\\dev\\second',
+      shell: 'pwsh.exe',
+    });
+  });
+
   it('leaves the location unset when the pane has no classifiable surface', () => {
     const { state, slice } = createHarness();
     const paneId = state.workspaces[0].rootPane.id;
