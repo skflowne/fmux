@@ -68,7 +68,7 @@ import type { AgentSlug } from '../shared/events';
 import { LANLINK_SENTINEL_SESSION_ID } from '../shared/lanlink';
 import { classifyTasklistOutput, classifyKillOutcome, lockOwnerIsReclaimable, type ProcessLiveness } from '../shared/processLiveness';
 import { locationIdentity, resolveReplayLocation } from '../shared/sessionLocation';
-import { transcriptFileLives } from '../main/claude/lastAssistantMessage';
+import { transcriptFileLives, transcriptFileProvenLive } from '../main/claude/lastAssistantMessage';
 
 // wmux web — read-only-by-default browser terminal. Instantiated lazily in
 // registerRpcHandlers; nothing listens until a `daemon.web.start` RPC arrives
@@ -511,15 +511,21 @@ function log(level: string, msg: string, ...args: unknown[]): void {
 // exact stored path (slug-rule-free). Bindings with no transcriptPath (older
 // captures) are treated as usable — we can't prove them dead, and `--resume`
 // degrades gracefully if so.
+// `requireProof` asks for a positively answered existence rather than a merely
+// un-disproven one (see the one-shot launch decision below). A binding with no
+// transcriptPath stays usable either way: there is no path to probe, so a
+// stricter probe has nothing extra to answer.
 function bindingTranscriptLives(
   binding: ResumeBinding | undefined,
   session?: Pick<DaemonSession, 'id' | 'cmd' | 'cwd' | 'location'>,
+  opts?: { requireProof?: boolean },
 ): boolean {
   if (!binding) return false;
   if (!binding.transcriptPath) return true;
-  if (!session) return transcriptFileLives(binding.transcriptPath);
+  const probe = opts?.requireProof ? transcriptFileProvenLive : transcriptFileLives;
+  if (!session) return probe(binding.transcriptPath);
   const { location, activeContext } = daemonSessionCommandTarget(session);
-  return transcriptFileLives(binding.transcriptPath, {
+  return probe(binding.transcriptPath, {
     location,
     activeSession: activeContext ?? { sessionId: session.id, active: true },
   });
@@ -570,13 +576,22 @@ function resumeLaunchCommand(
   if (spoolBinding && (!binding || (spoolBinding.ts ?? 0) > (binding.ts ?? 0))) {
     binding = spoolBinding;
   }
-  // D5: drop to `--continue` when the exact transcript is gone (pass no binding).
-  const usableBinding = bindingTranscriptLives(binding, session) ? binding : undefined;
+  // D5: drop to `--continue` unless the exact transcript is PROVEN to exist (pass
+  // no binding). This one decision is taken once and never revisited — a later
+  // poll that learns the truth cannot repair the command a pane already launched
+  // with — so unlike the polling call sites it cannot ride on "cannot prove it
+  // dead". A cold distro at daemon boot answers nothing, and gambling the pane's
+  // one `--resume <id>` on a possibly purged id costs "No conversation found."
+  // and exit 0; requiring proof costs a `--continue` that attaches to the latest
+  // conversation in the same cwd. Interim guard for #41.
+  const usableBinding = bindingTranscriptLives(binding, session, { requireProof: true })
+    ? binding
+    : undefined;
   // U-PERM: honor the persisted, consent-gated restore bit (set by main at
   // creation). When ON, toResumeCommand appends the captured permission flag
   // (e.g. --dangerously-skip-permissions) — but ONLY inside its binding+cwd-match
-  // branch, so a purged transcript (usableBinding undefined) still yields a plain
-  // --continue with no bypass (fail-safe). No trust file is read here.
+  // branch, so an unproven transcript (usableBinding undefined) still yields a
+  // plain --continue with no bypass (fail-safe). No trust file is read here.
   const restorePermissionMode = session.supervision?.restorePermissionMode === true;
   const rewritten = toResumeCommand(
     session.exec.command,

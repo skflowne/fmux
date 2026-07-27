@@ -7,6 +7,8 @@ import { DEFAULT_PROBE_TTL_MS } from '../transcriptProbeCache';
 import {
   readLastAssistantMessage,
   transcriptFileLives,
+  transcriptFileProvenLive,
+  defaultProber,
   endsWithQuestion,
   __resetTranscriptProbeCache,
   __whenTranscriptProbesIdle,
@@ -275,6 +277,56 @@ describe('WSL transcript reads', () => {
     }
   });
 
+  it('treats an unreadable host bridge as unproven, not as absent', () => {
+    // The only route into the bridge is a distro with no guest python3 — and if
+    // that distro has also gone idle, the UNC path is not statable at all.
+    // ENOENT there says nothing about the transcript, only that nothing could
+    // look at it, so recording it as an answer cached #29's exact failure mode
+    // for a full TTL inside the module written to eliminate it.
+    const lstat = vi.spyOn(fs, 'lstatSync').mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+    });
+    const run = vi.fn<TranscriptCommandRunner>().mockImplementation(() => {
+      throw Object.assign(new Error('execvpe(python3) failed: No such file or directory'), {
+        stderr: Buffer.from('execvpe(python3) failed: No such file or directory'),
+      });
+    });
+    try {
+      expect(transcriptFileLives('/home/me/idle.jsonl', context, run)).toBe(true);
+      expect(lstat).toHaveBeenCalledWith(
+        '\\\\wsl.localhost\\Ubuntu-24.04\\home\\me\\idle.jsonl',
+      );
+      // Nothing was recorded as an answer either, so the pill and the id are not
+      // hidden for the rest of the TTL on the strength of a failed look.
+      expect(transcriptFileProvenLive('/home/me/idle.jsonl', context, run)).toBe(false);
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it('still reads a missing transcript through a reachable bridge as absent', () => {
+    // The other side of the same rule, or "always unproven" would pass the test
+    // above: with the containing directory visible, ENOENT on the file is a real
+    // answer and a purged transcript must still be detected.
+    const lstat = vi.spyOn(fs, 'lstatSync').mockImplementation(((target: string) => {
+      if (String(target).endsWith('.jsonl')) {
+        throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+      }
+      return { isFile: () => false, isDirectory: () => true } as fs.Stats;
+    }) as unknown as typeof fs.lstatSync);
+    const run = vi.fn<TranscriptCommandRunner>().mockImplementation(() => {
+      throw Object.assign(new Error('execvpe(python3) failed: No such file or directory'), {
+        stderr: Buffer.from('execvpe(python3) failed: No such file or directory'),
+      });
+    });
+    try {
+      expect(transcriptFileLives('/home/me/purged.jsonl', context, run)).toBe(false);
+      expect(lstat).toHaveBeenCalledWith('\\\\wsl.localhost\\Ubuntu-24.04\\home\\me');
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
   it('treats a timed-out probe as unproven, not as absent', () => {
     const run = vi.fn<TranscriptCommandRunner>().mockImplementation(() => {
       const err = new Error('timed out');
@@ -441,6 +493,87 @@ describe('WSL transcript reads', () => {
     const unsafe = vi.fn<TranscriptCommandRunner>().mockReturnValue(Buffer.from('0'));
     expect(transcriptFileLives('/home/me/live.jsonl', context, live)).toBe(true);
     expect(transcriptFileLives('/home/me/unsafe.jsonl', context, unsafe)).toBe(false);
+  });
+});
+
+/**
+ * The two halves of the seam have to agree on what counts as an answer, and that
+ * agreement is a property of the pair rather than of either function — an
+ * injected runner cannot observe it, because a test supplies both of its own
+ * rules. So these drive the real defaults against one real failing process.
+ */
+describe('the default prober', () => {
+  const options = { timeout: 10_000, maxBuffer: 64 * 1024, windowsHide: true };
+
+  it('gives both halves one rule: a non-zero exit is never an answer', async () => {
+    // wsl.exe writes a diagnostic to stdout and exits non-zero for a renamed or
+    // removed distro. The async half used to resolve that diagnostic as the probe
+    // result — and since it is not '1', a poll 30 s after a correct "unproven"
+    // recorded the binding dead through the very same failure.
+    const args = ['-e', 'process.stdout.write("diagnostic"); process.exit(1)'];
+    expect(() => defaultProber.sync(process.execPath, args, options)).toThrow();
+    await expect(defaultProber.async(process.execPath, args, options)).rejects.toThrow();
+  });
+
+  it('gives both halves the guest helper output on a clean exit', async () => {
+    const args = ['-e', 'process.stdout.write("1")'];
+    expect(defaultProber.sync(process.execPath, args, options).toString()).toBe('1');
+    expect((await defaultProber.async(process.execPath, args, options)).toString()).toBe('1');
+  });
+});
+
+/**
+ * `transcriptFileLives` answers "not known to be gone"; the exec/supervised
+ * launch decision needs "known to exist", because it is taken once at recovery
+ * and a later poll cannot repair the command a pane already launched with.
+ */
+describe('transcriptFileProvenLive', () => {
+  const location: SessionLocation = {
+    domain: 'wsl',
+    cwd: '/work/repo',
+    shell: 'wsl.exe',
+    distro: 'Ubuntu-24.04',
+  };
+  const context = {
+    location,
+    activeSession: { sessionId: 'pty-1', active: true as const, distro: 'Ubuntu-24.04' },
+  };
+
+  beforeEach(() => __resetTranscriptProbeCache());
+  afterEach(() => __resetTranscriptProbeCache());
+
+  it('reports a probe that could not look as unproven, where liveness assumes alive', () => {
+    const run = vi.fn<TranscriptCommandRunner>().mockImplementation(() => {
+      throw Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' });
+    });
+    // Both readings are deliberate: the binding stays on disk and the pill stays
+    // up, while the launch degrades to `--continue` rather than gambling the
+    // pane's one --resume on an id nothing could confirm.
+    expect(transcriptFileLives('/home/me/cold.jsonl', context, run)).toBe(true);
+    expect(transcriptFileProvenLive('/home/me/cold.jsonl', context, run)).toBe(false);
+  });
+
+  it('reports a positive answer as proven', () => {
+    const run = vi.fn<TranscriptCommandRunner>().mockReturnValue(Buffer.from('1'));
+    expect(transcriptFileProvenLive('/home/me/live.jsonl', context, run)).toBe(true);
+    // Served from the same cached answer — proof costs no extra guest command.
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a negative answer as not proven', () => {
+    const run = vi.fn<TranscriptCommandRunner>().mockReturnValue(Buffer.from('0'));
+    expect(transcriptFileProvenLive('/home/me/gone.jsonl', context, run)).toBe(false);
+  });
+
+  it('follows the host reader off the WSL branch, where there is no third state', () => {
+    const lstat = vi.spyOn(fs, 'lstatSync').mockReturnValue({ isFile: () => true } as fs.Stats);
+    try {
+      expect(transcriptFileProvenLive('C:\\Users\\me\\session.jsonl')).toBe(true);
+      lstat.mockReturnValue({ isFile: () => false } as fs.Stats);
+      expect(transcriptFileProvenLive('C:\\Users\\me\\session.jsonl')).toBe(false);
+    } finally {
+      lstat.mockRestore();
+    }
   });
 });
 

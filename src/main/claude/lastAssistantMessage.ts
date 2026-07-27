@@ -91,9 +91,14 @@ const runTranscriptCommand: TranscriptCommandRunner = (file, args, options) =>
 const runTranscriptCommandAsync: AsyncTranscriptCommandRunner = (file, args, options) =>
   new Promise((resolve, reject) => {
     execFile(file, [...args], { ...options, encoding: 'buffer' }, (error, stdout, stderr) => {
-      // A non-zero exit that still produced output is an answer: the guest helper
-      // writes '1' and exits, and a warning on stderr must not discard that.
-      if (error && !stdout?.length) {
+      // One rule, the same one `execFileSync` enforces for the synchronous half:
+      // a non-zero exit is never an answer. The guest helper swallows its own
+      // errors and always exits 0, so it cannot produce a failure carrying
+      // output; what can is `wsl.exe` writing a diagnostic to stdout for a
+      // renamed or removed distro. Reading that as a probe result classified the
+      // very same failure as "transcript gone" here and as "could not look"
+      // there — two error rules in the module that exists to have one.
+      if (error) {
         reject(Object.assign(error, { stderr }));
         return;
       }
@@ -101,7 +106,14 @@ const runTranscriptCommandAsync: AsyncTranscriptCommandRunner = (file, args, opt
     });
   });
 
-const defaultProber: TranscriptProber = {
+/**
+ * The pair every production call site runs on.
+ *
+ * Exported so a test can hold both halves against one real failing process:
+ * their agreement on what counts as an answer is a property of this pair, not of
+ * either function alone, and it cannot be observed through an injected runner.
+ */
+export const defaultProber: TranscriptProber = {
   sync: runTranscriptCommand,
   async: runTranscriptCommandAsync,
 };
@@ -135,11 +147,49 @@ function resolveHostTranscriptPath(
   return resolved.ok ? resolved.path : null;
 }
 
-function hostTranscriptLives(hostPath: string): boolean {
+/** Codes that describe a path, given that something could look at the path at
+ *  all. Every other code — EIO, EACCES, EPERM, ENETUNREACH from a bridge whose
+ *  guest is not running — describes the attempt instead. */
+const ABSENCE_ERROR_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR']);
+
+function isAbsenceError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === 'string' && ABSENCE_ERROR_CODES.has(code);
+}
+
+/** Separator-agnostic: the same rule has to hold for a guest path and for a
+ *  `\\wsl.localhost\...` UNC one, on whichever platform the test suite runs. */
+function containingDirectoryOf(hostPath: string): string | null {
+  const cut = Math.max(hostPath.lastIndexOf('/'), hostPath.lastIndexOf('\\'));
+  return cut > 0 ? hostPath.slice(0, cut) : null;
+}
+
+function directoryIsReachable(dir: string): boolean {
   try {
-    return fs.lstatSync(hostPath).isFile();
+    return fs.lstatSync(dir).isDirectory();
   } catch {
     return false;
+  }
+}
+
+/**
+ * Classify one host `lstat`, which is not the same thing as answering it.
+ *
+ * A clean stat answers outright. A throw only answers when the directory that
+ * would hold the file can still be seen: through the `\\wsl.localhost` bridge an
+ * idle or renamed distro makes the whole path unstatable — `ENOENT` included — so
+ * trusting the code alone records "nothing could look" as "it is not there",
+ * which is the failure this module exists to prevent.
+ */
+function hostProbeOutcome(hostPath: string): ProbeOutcome {
+  try {
+    return { status: 'answered', lives: fs.lstatSync(hostPath).isFile() };
+  } catch (error) {
+    if (!isAbsenceError(error)) return { status: 'unreachable' };
+    const dir = containingDirectoryOf(hostPath);
+    return dir && directoryIsReachable(dir)
+      ? { status: 'answered', lives: false }
+      : { status: 'unreachable' };
   }
 }
 
@@ -182,10 +232,11 @@ function missingGuestPython(error: unknown, stderr?: Buffer | string): boolean {
  * absent, use the same no-follow/non-blocking host reader via \\wsl.localhost
  * rather than discarding the exact resume binding.
  *
- * The two ways this can fail are not the same answer. An `lstat` through the
- * bridge that says "not a regular file" IS evidence of absence; failing to map
- * the guest path to a host one at all is not, and must not be recorded as
- * though the transcript were gone.
+ * The ways this can fail are not the same answer. An `lstat` through the bridge
+ * that says "not a regular file" IS evidence of absence; failing to map the guest
+ * path to a host one at all is not, and neither is an `lstat` that could not
+ * reach the guest — `hostProbeOutcome` keeps those apart. None of them may be
+ * recorded as though the transcript were gone.
  */
 function hostWslProbeOutcome(
   transcriptPath: string,
@@ -193,7 +244,7 @@ function hostWslProbeOutcome(
 ): ProbeOutcome {
   const hostPath = resolveHostTranscriptPath(transcriptPath, context);
   if (!hostPath) return { status: 'unreachable' };
-  return { status: 'answered', lives: hostTranscriptLives(hostPath) };
+  return hostProbeOutcome(hostPath);
 }
 
 /**
@@ -375,7 +426,40 @@ export function transcriptFileLives(
     );
   }
   const hostPath = resolveHostTranscriptPath(transcriptPath, context);
-  return hostPath ? hostTranscriptLives(hostPath) : false;
+  if (!hostPath) return false;
+  // No assume-alive rule off the WSL branch: a local `lstat` that could not look
+  // stays "not live" here, exactly as it did before the outcome type existed.
+  const outcome = hostProbeOutcome(hostPath);
+  return outcome.status === 'answered' && outcome.lives;
+}
+
+/**
+ * "Known to exist", rather than "not known to be gone".
+ *
+ * `transcriptFileLives` assumes alive when a probe could not look, which is the
+ * right default for a status marker and for keeping a captured binding on disk:
+ * both are revisited on the next poll. A launch decision is not. It is taken once
+ * and never re-evaluated, so acting on an unproven transcript spends the pane's
+ * one `--resume <id>` on an id that may have been purged — which prints "No
+ * conversation found." and exits 0, with no exit code left to fall back on.
+ *
+ * Interim, and deliberately narrow: it asks the stricter question at the one call
+ * site whose cost is unrecoverable, without pretending the seam is fixed. #41
+ * replaces both of these with the three-valued outcome the cache already holds,
+ * so every consumer states its own rule for "could not be determined".
+ */
+export function transcriptFileProvenLive(
+  transcriptPath: string,
+  context?: TranscriptReadContext,
+  run?: TranscriptCommandRunner | TranscriptProber,
+): boolean {
+  const lives = transcriptFileLives(transcriptPath, context, run);
+  if (context?.location.domain !== 'wsl') return lives;
+  // The call above has already probed or scheduled the refresh for this key, so
+  // the recorded answer is as current as the cache can make it. Only the WSL
+  // branch can hold "attempted, never answered", which is the state `lives`
+  // flattens to true and this must report as unproven.
+  return wslProbeCache.answerFor(probeCacheKey(transcriptPath, context))?.lives === true;
 }
 
 /**
