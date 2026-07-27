@@ -925,7 +925,7 @@ function SplitSurfaceView({
               filePath={surface.editorFilePath || ''}
               isActive={surface.id === activeSurfaceId}
               surfaceId={surface.id}
-              location={surface.location}
+              fileOrigin={surface.location}
             />
           ) : surface.surfaceType === 'browser' ? (
             <BrowserPanel
@@ -1051,7 +1051,7 @@ function SplitSurfaceView({
             filePath={surface.editorFilePath || ''}
             isActive={surface.id === activeSurfaceId}
             surfaceId={surface.id}
-            location={surface.location}
+            fileOrigin={surface.location}
           />
         ),
       )}

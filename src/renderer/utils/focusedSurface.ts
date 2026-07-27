@@ -39,6 +39,13 @@ export function sessionLocationForSurface(surface: Surface | undefined): Session
   });
 }
 
+/** `surfaceType` is optional on surfaces persisted before it existed, so its
+ *  absence means terminal. One spelling, because two of them in this file is
+ *  the shape of drift it exists to prevent. */
+function isTerminalSurface(surface: Surface | undefined): surface is Surface {
+  return !!surface && (surface.surfaceType ?? 'terminal') === 'terminal';
+}
+
 /**
  * The working location a surface PUBLISHES, which only a terminal has (issue
  * #46). A browser, editor, or diff surface is created with `ptyId: ''`, and
@@ -51,8 +58,7 @@ export function sessionLocationForSurface(surface: Surface | undefined): Session
  * window carries a stored location with no cwd, and must still publish it.
  */
 function publishedSessionLocation(surface: Surface | undefined): SessionLocation | null {
-  if (!surface) return null;
-  if ((surface.surfaceType ?? 'terminal') !== 'terminal') return null;
+  if (!isTerminalSurface(surface)) return null;
   return sessionLocationForSurface(surface);
 }
 
@@ -103,8 +109,6 @@ export function focusedTerminalPtyId(workspace: Workspace | undefined): string |
   const leaf = findActiveLeaf(workspace.rootPane, workspace.activePaneId);
   if (!leaf) return null;
   const surface = leaf.surfaces.find((s) => s.id === leaf.activeSurfaceId);
-  if (!surface) return null;
-  const type = surface.surfaceType ?? 'terminal';
-  if (type !== 'terminal') return null;
+  if (!isTerminalSurface(surface)) return null;
   return surface.ptyId ? surface.ptyId : null;
 }

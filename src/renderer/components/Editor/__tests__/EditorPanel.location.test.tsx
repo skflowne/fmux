@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 //
-// EditorPanel reads files through the surface's SessionLocation — on mount AND
+// EditorPanel reads files through the surface's file origin — the machine the
+// file is on, not where the pane is working (issue #46) — on mount AND
 // on Reload. `fs.readFile` refuses a call without a location (issue #21: a
 // path is only meaningful inside the domain that produced it), so a Reload
 // that dropped the location returned "Unable to read file" on every platform.
@@ -38,7 +39,7 @@ async function mount(location: SessionLocation | undefined) {
       filePath: 'C:\\dev\\fmux\\README.md',
       isActive: true,
       surfaceId: 'surf-1',
-      location,
+      fileOrigin: location,
     }));
   });
 }
@@ -50,7 +51,7 @@ function reloadButton(): HTMLButtonElement {
   return el as HTMLButtonElement;
 }
 
-describe('EditorPanel — the file read carries the surface location', () => {
+describe('EditorPanel — the file read carries the file origin', () => {
   it('passes the location on mount', async () => {
     await mount(HOST);
     expect(readFile).toHaveBeenCalledWith('C:\\dev\\fmux\\README.md', HOST);
@@ -69,7 +70,7 @@ describe('EditorPanel — the file read carries the surface location', () => {
     expect(container.textContent).toContain('file body');
   });
 
-  it('reads nothing at all when the surface has no location', async () => {
+  it('reads nothing at all when the surface has no origin', async () => {
     await mount(undefined);
     expect(readFile).not.toHaveBeenCalled();
     expect(container.textContent).toContain('Unable to read file');
