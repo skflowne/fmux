@@ -758,6 +758,9 @@ function ingestResumeSpool(
 
     // D5: a purged origin transcript makes `--resume` a silent "No conversation
     // found." — drop the record (the pill can still degrade to --continue).
+    // Only a probe that actually looked and found nothing gets here: a guest that
+    // could not be reached answers "cannot prove it dead", so an idle distro at
+    // boot ingests the record instead of unlinking the one durable copy of it.
     if (!bindingTranscriptLives(binding, managed.meta)) { drop(); continue; }
 
     managed.meta.resumeBinding = mergeResumeBinding(prev, binding);

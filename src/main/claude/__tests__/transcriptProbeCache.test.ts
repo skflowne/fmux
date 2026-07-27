@@ -5,8 +5,9 @@ import {
 } from '../transcriptProbeCache';
 
 /**
- * The cache guards one invariant: a transcript-existence answer is at most TTL
- * old, and an unreachable guest is never evidence of absence.
+ * The cache guards one invariant: a recorded answer is revalidated once the TTL
+ * has passed, and an unreachable guest is never evidence of absence — so a
+ * retained answer outlives its TTL for as long as the guest cannot answer.
  *
  * Every behaviour here was unreachable before the extraction — the TTL, the
  * single-flight flag, the FIFO cap and the error-retention rule all lived in
@@ -104,6 +105,33 @@ describe('transcript probe cache', () => {
     // Still never answered, so still never recorded as absent.
     expect(cache.answerFor('k')).toBeNull();
     expect(probe).toHaveBeenCalledTimes(1);
+  });
+
+  it('spaces the next retry from when a failed refresh finished, not when it started', async () => {
+    const clock = testClock();
+    const cache = makeCache(clock.now);
+    const probe = vi.fn(() => unreachable);
+    const refresh = deferredProbe();
+
+    expect(cache.lives('k', probe, refresh.calls)).toBe(true);
+    clock.advance(TTL);
+    expect(cache.lives('k', probe, refresh.calls)).toBe(true);
+    expect(refresh.calls).toHaveBeenCalledTimes(1);
+
+    // A cold distro can hold the attempt open for longer than the TTL. The
+    // throttle is stamped when the attempt completes, so finishing late does not
+    // hand back an entry that is already due — otherwise the very next poll
+    // re-spawns wsl.exe against the guest that just failed to answer.
+    clock.advance(TTL * 2);
+    refresh.settle(unreachable);
+    await cache.whenIdle();
+    expect(cache.lives('k', probe, refresh.calls)).toBe(true);
+    expect(refresh.calls).toHaveBeenCalledTimes(1);
+
+    clock.advance(TTL);
+    expect(cache.lives('k', probe, refresh.calls)).toBe(true);
+    expect(refresh.calls).toHaveBeenCalledTimes(2);
+    expect(cache.answerFor('k')).toBeNull();
   });
 
   it('serves the cached answer until the TTL expires, then refreshes exactly once', async () => {

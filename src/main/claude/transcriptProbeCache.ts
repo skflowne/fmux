@@ -1,8 +1,15 @@
 /**
  * Cache for transcript-existence probes.
  *
- * Invariant: **a transcript-existence answer is at most `ttlMs` old, and an
+ * Invariant: **a recorded answer is revalidated once `ttlMs` has passed, and an
  * unreachable guest is never evidence of absence.**
+ *
+ * The second half bounds the first. A refresh that cannot reach the guest
+ * records no answer, so `lives()` goes on serving the last one it has for as
+ * long as the guest stays unreachable — past `ttlMs`, without limit. That is
+ * deliberate: discarding a retained answer because the guest went idle is the
+ * "could not look" → "it is not there" collapse this module exists to prevent.
+ * An answer is at most `ttlMs` old only while the guest can still answer.
  *
  * Why this is its own module. The host branch of a transcript liveness probe is
  * one local `lstat`, but the WSL branch spawns `wsl.exe` and blocks for up to
@@ -119,11 +126,16 @@ export function createTranscriptProbeCache(
   const inFlight = new Set<Promise<void>>();
 
   /**
-   * The only writer of `answer`.
+   * The only writer of `answer`, and the only writer of `attemptedAt` that any
+   * later read observes.
    *
    * Both the first blocking probe and every out-of-band refresh land here, which
    * is what keeps the error rule single: an outcome that could not look is
-   * recorded as an attempt and nothing else.
+   * recorded as an attempt and nothing else. The stamp sits *above* the answered
+   * guard because a failed attempt is exactly what the retry throttle exists to
+   * space out. `ensureRefresh` stamps the same field when an attempt starts, to
+   * hold the gate shut while it runs; this stamp supersedes it on completion, so
+   * a probe that failed slowly is not due again the moment it returns.
    */
   function record(key: string, outcome: ProbeOutcome): void {
     const entry = entries.get(key);
@@ -143,9 +155,10 @@ export function createTranscriptProbeCache(
    * The orphan must not then write into the replacement, which is what the
    * entry-identity check in `ensureRefresh` prevents.
    *
-   * `attemptedAt` is stamped here as well as in `record` — belt and braces, so a
-   * fresh entry is never one poll away from a refresh regardless of which writer
-   * ran last.
+   * The `attemptedAt` given here only guarantees the field is defined: the
+   * `record` call below runs unconditionally on the entry just created and
+   * overwrites it, so no read ever sees this value. `record` is the effective
+   * writer on every path.
    */
   function insert(key: string, outcome: ProbeOutcome): void {
     if (entries.size >= max) {
