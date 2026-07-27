@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { isSensitivePath, registerFsHandlers, resolveAccessiblePath } from '../fs.handler';
+import {
+  isSensitivePath,
+  refusesSensitivePath,
+  registerFsHandlers,
+  resolveAccessiblePath,
+} from '../fs.handler';
 import { ipcMain } from 'electron';
 
 vi.mock('electron', () => ({
@@ -95,6 +100,11 @@ describe('fs.handler security helpers', () => {
     realpathSpy.mockResolvedValue(canonical);
 
     await expect(resolveAccessiblePath(path.join(home, 'project', 'src', '..', 'src', 'index.ts'))).resolves.toBe(canonical);
+    // One canonicalisation, and the path returned is the one the gate vetted.
+    // Clearing the path and then resolving it again would both waste the
+    // syscall and open the window where the second answer is a link the first
+    // was not.
+    expect(realpathSpy).toHaveBeenCalledTimes(1);
   });
 
   it('returns null when canonicalization fails', async () => {
@@ -157,7 +167,10 @@ describe('fs.handler security helpers', () => {
       vi.fn(() => ({ ok: true as const, path: accessible })),
     )).resolves.toBeNull();
 
-    expect(realpathSpy).toHaveBeenCalledWith(path.resolve(accessible));
+    // The UNC spelling verbatim: a Windows-shaped path is resolved in its own
+    // shape, so this is also what distinguishes the gate from a platform
+    // `path.resolve`, which on the POSIX CI legs would prefix it with the cwd.
+    expect(realpathSpy).toHaveBeenCalledWith(accessible);
   });
 
   it('fails softly when WSL conversion requires a missing distro', async () => {
@@ -191,7 +204,7 @@ describe('fs.handler security helpers', () => {
   // the SessionLocation contract itself and reject it, so a Git Bash pane got
   // an empty file tree.
   it('accepts an MSYS location and converts its guest path', async () => {
-    const converted = path.resolve('C:\\dev\\proj');
+    const converted = 'C:\\dev\\proj';
     realpathSpy.mockResolvedValue(converted);
     vi.spyOn(fs.promises, 'readdir').mockResolvedValue([] as never);
     registerFsHandlers();
@@ -213,4 +226,110 @@ describe('fs.handler security helpers', () => {
     expect(realpathSpy).toHaveBeenCalledWith(converted);
   });
 
+});
+
+/**
+ * The three-pass gate itself, which `fs.readDir` and `git:status` now share.
+ * Asserted here on the export rather than through either handler, so the table
+ * is the gate's own contract and not one channel's reading of it.
+ *
+ * Windows spellings and a Windows home throughout: MSYS and WSL locations only
+ * exist on Windows, and the passes are string logic, so the table holds on
+ * every CI leg.
+ */
+describe('refusesSensitivePath', () => {
+  const HOME = 'C:\\Users\\tester';
+  const MSYS_SHELL = 'C:\\Program Files\\Git\\bin\\bash.exe';
+  const msys = (cwd: string) => ({ domain: 'msys' as const, cwd, shell: MSYS_SHELL });
+  let realpathSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(os, 'homedir').mockReturnValue(HOME);
+    realpathSpy = vi.spyOn(fs.promises, 'realpath')
+      .mockImplementation(async (target) => target as string) as never;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('refuses the raw guest cwd before any conversion', async () => {
+    await expect(refusesSensitivePath(msys('/c/Users/tester/.ssh'))).resolves.toBe(true);
+    expect(realpathSpy).not.toHaveBeenCalled();
+  });
+
+  it('refuses a path that only collapses into a credential directory once resolved', async () => {
+    // `..` is collapsed in the spelling the path is WRITTEN in, not the one the
+    // running platform uses: this is a Windows path whichever OS reads it, and
+    // a platform `path.resolve` on the POSIX legs would neither collapse the
+    // segment nor keep the drive prefix, so nothing would match home.
+    await expect(refusesSensitivePath(msys('/c/Users/tester/proj/../.ssh'))).resolves.toBe(true);
+  });
+
+  it('refuses a junction whose canonical target is a credential directory', async () => {
+    realpathSpy.mockResolvedValue(`${HOME}\\.ssh` as never);
+    await expect(refusesSensitivePath(msys('/c/dev/proj'))).resolves.toBe(true);
+  });
+
+  it('fails closed on a path it cannot canonicalise', async () => {
+    realpathSpy.mockRejectedValue(new Error('ENOENT') as never);
+    await expect(refusesSensitivePath(msys('/c/dev/proj'))).resolves.toBe(true);
+  });
+
+  it('clears an innocent location', async () => {
+    await expect(refusesSensitivePath(msys('/c/dev/proj'))).resolves.toBe(false);
+    expect(realpathSpy).toHaveBeenCalledWith('C:\\dev\\proj');
+  });
+
+  it('takes the path under test over the location cwd when given one', async () => {
+    await expect(
+      refusesSensitivePath(msys('/c/dev/proj'), '/c/Users/tester/.aws'),
+    ).resolves.toBe(true);
+  });
+
+  it('does not refuse a guest path that has no host spelling', async () => {
+    // Unconvertible is not sensitive. The raw pass already cleared the cwd, and
+    // whether a distro-less WSL location may run anything is the execution
+    // API's rule, not this gate's.
+    await expect(refusesSensitivePath(
+      { domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe' },
+    )).resolves.toBe(false);
+    expect(realpathSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('fs:read-dir through the shared gate', () => {
+  const HOME = 'C:\\Users\\tester';
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(os, 'homedir').mockReturnValue(HOME);
+    vi.spyOn(fs.promises, 'realpath').mockImplementation(async (t) => t as string);
+    vi.spyOn(fs.promises, 'readdir').mockResolvedValue([] as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('refuses an MSYS path that resolves into a credential directory', async () => {
+    registerFsHandlers();
+    const readDir = vi.mocked(ipcMain.handle).mock.calls
+      .find(([channel]) => channel === 'fs:read-dir')?.[1];
+    expect(readDir).toBeTypeOf('function');
+
+    await expect(readDir!(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        path: '/c/Users/tester/proj/../.ssh',
+        location: {
+          domain: 'msys',
+          cwd: '/c/Users/tester/proj',
+          shell: 'C:\\Program Files\\Git\\bin\\bash.exe',
+        },
+      },
+    )).resolves.toEqual([]);
+    expect(fs.promises.readdir).not.toHaveBeenCalled();
+  });
 });

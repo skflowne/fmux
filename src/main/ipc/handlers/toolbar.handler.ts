@@ -1,16 +1,13 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
-import fs from 'node:fs';
-import path from 'node:path';
 import { IPC } from '../../../shared/constants';
 import {
   parseSessionLocation,
-  toHostAccessiblePath,
   type SessionLocation,
 } from '../../../shared/sessionLocation';
 import { wrapHandler } from '../wrapHandler';
 import { git } from '../../git/git';
 import { locationCommandTarget, type PaneCommandTarget } from '../../git/paneCommand';
-import { isSensitivePath } from './fs.handler';
+import { refusesSensitivePath } from './fs.handler';
 
 /** The live pane behind a location, when one exists — see metadata.handler's
  *  `findPaneCommandTargetForLocation`. Injected so this handler does not import
@@ -18,34 +15,6 @@ import { isSensitivePath } from './fs.handler';
 export type LivePaneTargetResolver = (
   location: SessionLocation,
 ) => PaneCommandTarget | undefined;
-
-/**
- * The refusal `resolveAccessiblePath` used to carry into this channel, kept at
- * all three of the spellings it checked.
- *
- * The raw guest cwd is the one spelling that hides a credential directory —
- * `/c/Users/me/.ssh` and `/mnt/c/Users/me/.ssh` are recognisable only once
- * converted — and a symlink hides it from all three, which is why the last check
- * runs on the canonical path. That last one is host-only: a guest path has no
- * host `realpath`, so for msys and WSL the first two checks are the whole gate.
- */
-async function refusesSensitivePath(location: SessionLocation): Promise<boolean> {
-  if (isSensitivePath(location.cwd, location)) return true;
-  const accessible = toHostAccessiblePath(location, location.cwd);
-  if (!accessible.ok) return false;
-  // Resolve `..` in the spelling the path is actually written in: these paths
-  // cross domains, so the running platform is not what decides it.
-  const shape = /^[A-Za-z]:[\\/]|^\\\\/.test(accessible.path) ? path.win32 : path.posix;
-  const resolved = shape.resolve(accessible.path);
-  if (isSensitivePath(resolved, location)) return true;
-  if (location.domain !== 'host') return false;
-  try {
-    return isSensitivePath(await fs.promises.realpath(resolved), location);
-  } catch {
-    // Nothing there to canonicalise. git will fail on it just as loudly.
-    return false;
-  }
-}
 
 export function registerToolbarHandlers(
   findLivePaneTarget: LivePaneTargetResolver,
@@ -63,9 +32,9 @@ export function registerToolbarHandlers(
   // the pane's; a location no pane is running in is refused there.
   //
   // The one thing lost with the old `resolveAccessiblePath` conversion is its
-  // sensitive-path refusal, so that check stays here explicitly (see
-  // `refusesSensitivePath`): `fs.readDir` still declines to list `~/.ssh`, and
-  // this channel must not report its contents through git instead.
+  // sensitive-path refusal, so this channel asks fs.handler's gate for the same
+  // verdict rather than restating it: `fs.readDir` declines to list `~/.ssh`,
+  // and this channel must not report its contents through git instead.
   ipcMain.removeHandler(IPC.GIT_STATUS);
   ipcMain.handle(IPC.GIT_STATUS, wrapHandler(IPC.GIT_STATUS, async (_event: Electron.IpcMainInvokeEvent, raw: unknown): Promise<string> => {
     const location = parseSessionLocation(raw);
