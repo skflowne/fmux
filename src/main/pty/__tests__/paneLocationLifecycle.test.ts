@@ -5,6 +5,7 @@ import {
   updatePaneLocation,
   removePaneLocation,
   getPaneCommandTarget,
+  findPaneCommandTargetForLocation,
   removeCwd,
 } from '../../ipc/handlers/metadata.handler';
 
@@ -163,6 +164,127 @@ describe('I1 — a live WSL pane can be acted on in its first session', () => {
     updatePaneLocation(ptyId, { domain: 'host', cwd: 'C:\\repo', shell: 'pwsh.exe' });
     updateCwd(ptyId, 'C:\\repo');
     expect(resolveWslDistro).not.toHaveBeenCalled();
+    reset(ptyId);
+  });
+});
+
+/**
+ * Issue #30 — a consumer that holds a location, not a ptyId (the toolbar's
+ * `git:status` payload is the active surface's location) still has to reach the
+ * live pane behind it: only a live pane carries the active-session context
+ * `preparePaneCommand` demands before it will run anything in a guest.
+ */
+describe('the live pane behind a location', () => {
+  // A pane leaked by a failing assertion is now reachable BY LOCATION, so it
+  // could redden a later test instead of only its own.
+  const registered = [
+    'pty-find-wsl', 'pty-find-mismatch', 'pty-find-host', 'pty-find-other',
+    'pty-find-halfway', 'pty-find-msys', 'pty-find-nodistro',
+  ];
+  afterEach(() => { for (const ptyId of registered) reset(ptyId); });
+
+  it('returns the pane whose current location matches, with its active context', () => {
+    const ptyId = 'pty-find-wsl';
+    reset(ptyId);
+    updatePaneLocation(ptyId, {
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    });
+    updateCwd(ptyId, '/home/me/proj');
+
+    const target = findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    })!;
+    expect(target.sessionId).toBe(ptyId);
+    expect(preparePaneCommand(target, 'git', ['status'])).toEqual({
+      ok: true,
+      file: 'wsl.exe',
+      args: ['-d', 'Ubuntu', '--cd', '/home/me/proj', '--exec', 'git', 'status'],
+    });
+    reset(ptyId);
+  });
+
+  it('does not match another distro, a moved cwd, or a closed pane', () => {
+    const ptyId = 'pty-find-mismatch';
+    reset(ptyId);
+    updatePaneLocation(ptyId, {
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    });
+    updateCwd(ptyId, '/home/me/proj');
+
+    expect(findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Debian',
+    })).toBeUndefined();
+
+    // The pane `cd`s away: the old location no longer has a live owner.
+    updateCwd(ptyId, '/home/me/other');
+    expect(findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    })).toBeUndefined();
+
+    reset(ptyId);
+    expect(findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/other', shell: 'wsl.exe', distro: 'Ubuntu',
+    })).toBeUndefined();
+  });
+
+  it('matches a host pane, and keeps looking past the panes that do not match', () => {
+    const other = 'pty-find-other';
+    const halfRegistered = 'pty-find-halfway';
+    const ptyId = 'pty-find-host';
+    reset(other); reset(halfRegistered); reset(ptyId);
+
+    // Registered first, so a lookup that gives up on the first pane — or reads
+    // only one registry entry — never reaches the pane that matches.
+    updatePaneLocation(other, { domain: 'host', cwd: 'C:\\dev\\elsewhere', shell: 'pwsh.exe' });
+    updateCwd(other, 'C:\\dev\\elsewhere');
+    // A pane that exists but has not reported a cwd yet: skipped, not fatal.
+    updatePaneLocation(halfRegistered, { domain: 'host', cwd: 'C:\\dev\\proj', shell: 'pwsh.exe' });
+    updatePaneLocation(ptyId, { domain: 'host', cwd: 'C:\\dev\\proj', shell: 'pwsh.exe' });
+    updateCwd(ptyId, 'C:\\dev\\proj');
+
+    expect(findPaneCommandTargetForLocation({
+      domain: 'host', cwd: 'C:\\dev\\proj', shell: 'pwsh.exe',
+    })?.sessionId).toBe(ptyId);
+    reset(other); reset(halfRegistered); reset(ptyId);
+  });
+
+  it('follows a Git Bash pane into its MSYS domain', () => {
+    const ptyId = 'pty-find-msys';
+    reset(ptyId);
+    updatePaneLocation(ptyId, {
+      domain: 'host', cwd: 'C:\\dev\\x', shell: 'C:\\Program Files\\Git\\bin\\bash.exe',
+    });
+    updateCwd(ptyId, 'C:\\dev\\x');
+    updateCwd(ptyId, '/c/dev/x');
+
+    const target = findPaneCommandTargetForLocation({
+      domain: 'msys', cwd: '/c/dev/x', shell: 'C:\\Program Files\\Git\\bin\\bash.exe',
+    })!;
+    expect(target.sessionId).toBe(ptyId);
+    expect(preparePaneCommand(target, 'git', ['status'])).toEqual({
+      ok: true, file: 'git', args: ['status'], cwd: 'C:\\dev\\x',
+    });
+    reset(ptyId);
+  });
+
+  it('will not pair a named distro with a pane that has not resolved one', () => {
+    const ptyId = 'pty-find-nodistro';
+    reset(ptyId);
+    updatePaneLocation(ptyId, { domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe' });
+    updateCwd(ptyId, '/home/me/proj');
+
+    expect(findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    })).toBeUndefined();
+
+    // The unqualified request does reach that pane — and is refused for its
+    // missing distro by the shared gate, not by the lookup.
+    const target = findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe',
+    })!;
+    expect(target.sessionId).toBe(ptyId);
+    expect(preparePaneCommand(target, 'git', ['status']))
+      .toEqual({ ok: false, error: 'WSL_DISTRO_REQUIRED' });
     reset(ptyId);
   });
 });

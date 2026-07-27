@@ -35,3 +35,14 @@ export function preparePaneCommand(
 export function hostCommandTarget(cwd: string): PaneCommandTarget {
   return createSessionCommandTarget(`host:${cwd}`, hostLocation(cwd));
 }
+
+/**
+ * A target for a location with no live session behind it.
+ *
+ * Deliberately carries no active context, so the domains that need one — WSL —
+ * are refused here rather than starting a distro to answer for a location
+ * nothing is running in. Host and MSYS need none and behave as they always do.
+ */
+export function locationCommandTarget(location: SessionLocation): PaneCommandTarget {
+  return { sessionId: `location:${locationIdentity(location)}`, location };
+}

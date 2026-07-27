@@ -113,26 +113,106 @@ function readFileLocationRequest(raw: unknown): FileLocationRequest | null {
   return location ? { path: req.path, location } : null;
 }
 
+/**
+ * Collapse `..` in the spelling the path is actually WRITTEN in.
+ *
+ * These paths cross a domain conversion, so the running platform is not what
+ * decides their shape: a Git Bash pane's `/c/dev/proj` becomes `C:\dev\proj`
+ * whichever OS is reading the record, and `path.posix.resolve` would neither
+ * collapse its segments nor keep the drive prefix. The host platform still
+ * counts, because a rooted backslash path with no drive or UNC prefix
+ * (`\Users\me\proj\..`) is Windows-shaped only by virtue of running there.
+ */
+function resolveInPathShape(accessiblePath: string): string {
+  const windowsShaped = process.platform === 'win32'
+    || /^[A-Za-z]:[\\/]/.test(accessiblePath)
+    || accessiblePath.startsWith('\\\\');
+  return (windowsShaped ? path.win32 : path.posix).resolve(accessiblePath);
+}
+
+type PathClearance =
+  | { refused: true }
+  | { refused: false; canonical: string | null };
+
+/**
+ * The sensitive-path refusal, at all three of the spellings a credential
+ * directory can hide in — and the canonical path it cleared, for the caller
+ * that is about to read it.
+ *
+ * ONE implementation, because the invariant is a pair: a path this app refuses
+ * to browse (`fs.readDir`) is a path it refuses to run git in (`git:status`).
+ * A second copy that narrowed any pass would let one channel serve what the
+ * other declines.
+ *
+ * The passes, and why each exists:
+ *  1. The raw cwd, which is the only pass that can see a guest spelling —
+ *     `/home/me/.ssh` is recognisable here and nowhere else.
+ *  2. The converted path resolved in its own shape, which catches the guest
+ *     spellings that only look like a credential directory once converted
+ *     (`/c/Users/me/.ssh`, `/mnt/c/Users/me/.ssh`) and any `..` written around
+ *     one.
+ *  3. The canonical path, which is the only pass that sees a link or junction
+ *     into one. It runs for EVERY domain: msys converts to a drive path and
+ *     wsl to its `\\wsl.localhost` namespace, so the host has a real answer for
+ *     both. Accepted cost: `git:status` for a WSL pane pays one host round trip
+ *     over the share per call, even though the command itself runs in the
+ *     guest. Skipping it there would mean this app refuses to LIST a guest
+ *     symlink into `~/.ssh` while happily running git inside it, which is the
+ *     whole invariant.
+ *
+ * Fails closed: a path the host cannot canonicalise is one nothing cleared,
+ * not one nothing objected to. An unconvertible guest path is different — there
+ * is no host spelling to resolve, pass 1 already cleared the cwd, and whether
+ * such a location may run anything belongs to the execution API's rules, not
+ * to this gate.
+ */
+async function clearSensitivePath(
+  location: SessionLocation,
+  inputPath: string,
+  convert: LocationPathOperation,
+): Promise<PathClearance> {
+  if (isSensitivePath(inputPath, location)) return { refused: true };
+
+  const accessible = convert(location, inputPath);
+  if (!accessible.ok) return { refused: false, canonical: null };
+  const resolved = resolveInPathShape(accessible.path);
+  if (isSensitivePath(resolved, location)) return { refused: true };
+
+  try {
+    const canonical = await fs.promises.realpath(resolved);
+    return isSensitivePath(canonical, location)
+      ? { refused: true }
+      : { refused: false, canonical };
+  } catch {
+    return { refused: true };
+  }
+}
+
+/**
+ * Does the gate refuse this location? The whole answer for a caller that never
+ * touches the host path — `git:status`, which runs its git IN the location.
+ *
+ * `resolveAccessiblePath` shares the same gate but consumes the canonical path
+ * it cleared rather than calling through here, so that a read is vetted and
+ * performed against one canonicalisation instead of two.
+ */
+export async function refusesSensitivePath(
+  location: SessionLocation,
+  inputPath: string = location.cwd,
+  convert: LocationPathOperation = toHostAccessiblePath,
+): Promise<boolean> {
+  return (await clearSensitivePath(location, inputPath, convert)).refused;
+}
+
 export async function resolveAccessiblePath(
   inputPath: string,
   location: SessionLocation = hostLocation(inputPath),
   convert: LocationPathOperation = toHostAccessiblePath,
 ): Promise<string | null> {
   if (!inputPath || typeof inputPath !== 'string') return null;
-  if (isSensitivePath(inputPath, location)) return null;
-
-  const accessible = convert(location, inputPath);
-  if (!accessible.ok) return null;
-  const resolved = path.resolve(accessible.path);
-  if (isSensitivePath(resolved, location)) return null;
-
-  try {
-    const canonical = await fs.promises.realpath(resolved);
-    if (isSensitivePath(canonical, location)) return null;
-    return canonical;
-  } catch {
-    return null;
-  }
+  const clearance = await clearSensitivePath(location, inputPath, convert);
+  // An unconvertible path is not refused, but there is nothing here to read.
+  return clearance.refused ? null : clearance.canonical;
 }
 
 export function closeAllWatchers(): void {
