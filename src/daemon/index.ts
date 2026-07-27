@@ -758,9 +758,10 @@ function ingestResumeSpool(
 
     // D5: a purged origin transcript makes `--resume` a silent "No conversation
     // found." — drop the record (the pill can still degrade to --continue).
-    // On the WSL branch only a probe that actually looked and found nothing gets
-    // here — an unreachable guest answers "cannot prove it dead" — so an idle
-    // distro at boot no longer drops the record. It is still unlinked either way
+    // On the WSL branch only an outcome the probe layer classifies as evidence
+    // gets here — an unreachable guest answers "cannot prove it dead", so an idle
+    // distro at boot no longer drops the record, while a distro *mismatch* is
+    // absence without a spawn. It is still unlinked either way
     // (`drop()` here, the ingest's own `drop()` below); what differs is that the
     // ingested binding is written into `managed.meta` before its unlink, so the
     // capture outlives the spool file rather than going with it. The state flush

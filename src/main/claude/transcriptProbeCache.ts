@@ -130,13 +130,14 @@ export function createTranscriptProbeCache(
   /**
    * The only writer of `answer`.
    *
-   * Both the first blocking probe and every out-of-band refresh that settles land
-   * here, which is what keeps the error rule single: an outcome that could not
-   * look is recorded as an attempt and nothing else. The stamp sits *above* the
-   * answered guard because a failed attempt is exactly what the retry throttle
-   * exists to space out; it supersedes the one `ensureRefresh` takes when the
-   * attempt starts, so a probe that settled `unreachable` slowly is not due again
-   * the moment it returns.
+   * Both the first blocking probe and every out-of-band refresh that settles into
+   * its own entry land here — one whose entry was evicted or `reset` away is
+   * gated out below — which is what keeps the error rule single: an outcome that
+   * could not look is recorded as an attempt and nothing else. The stamp sits
+   * *above* the answered guard because a failed attempt is exactly what the
+   * retry throttle exists to space out; it supersedes the one `ensureRefresh`
+   * takes when the attempt starts, so a probe that settled `unreachable` slowly
+   * is not due again the moment it returns.
    *
    * A refresh that *rejects* never reaches here — `ensureRefresh` swallows it —
    * so on that one path the start stamp is the throttle, and the next retry is
