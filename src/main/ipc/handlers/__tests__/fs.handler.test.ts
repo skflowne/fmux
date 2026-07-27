@@ -316,6 +316,72 @@ describe('refusesSensitivePath', () => {
   });
 });
 
+/**
+ * The cross-distro refusal, which is about WHICH filesystem an answer came
+ * from and not about what is stored there — so both cases below use a plainly
+ * innocent project directory. A credential path would be refused for a second,
+ * independent reason and would not pin this guard at all.
+ *
+ * Driven through `fs:read-dir` rather than the helper, so the specs fail if the
+ * guard exists but nothing calls it. An empty listing is also what a FAILED
+ * read returns, so each refusal is pinned on the directory never being opened.
+ */
+describe('a path in another WSL distribution', () => {
+  const UBUNTU = {
+    domain: 'wsl' as const,
+    cwd: '/home/alice/project',
+    shell: 'wsl.exe',
+    distro: 'Ubuntu',
+  };
+  const DEBIAN_PATH = '\\\\wsl.localhost\\Debian\\home\\alice\\project';
+  let realpathSpy: ReturnType<typeof vi.spyOn>;
+  let readdirSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    realpathSpy = vi.spyOn(fs.promises, 'realpath')
+      .mockImplementation(async (target) => target as string) as never;
+    readdirSpy = vi.spyOn(fs.promises, 'readdir').mockResolvedValue([] as never);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function readDir(): (...args: unknown[]) => unknown {
+    registerFsHandlers();
+    const fn = vi.mocked(ipcMain.handle).mock.calls
+      .find(([channel]) => channel === 'fs:read-dir')?.[1];
+    if (!fn) throw new Error('fs:read-dir handler is not registered');
+    return fn as (...args: unknown[]) => unknown;
+  }
+
+  it('is refused before conversion when the request names it outright', async () => {
+    await expect(readDir()(
+      {} as Electron.IpcMainInvokeEvent,
+      { path: DEBIAN_PATH, location: UBUNTU },
+    )).resolves.toEqual([]);
+
+    expect(readdirSpy).not.toHaveBeenCalled();
+    // Refused at the raw path, so the host was never asked about it either.
+    expect(realpathSpy).not.toHaveBeenCalled();
+  });
+
+  it('is refused at the canonical path when a link reaches it', async () => {
+    // Innocent raw and innocent converted: only the canonical pass can see
+    // that the directory the pane would be shown lives in another guest.
+    realpathSpy.mockResolvedValue(DEBIAN_PATH as never);
+
+    await expect(readDir()(
+      {} as Electron.IpcMainInvokeEvent,
+      { path: '/home/alice/project', location: UBUNTU },
+    )).resolves.toEqual([]);
+
+    expect(realpathSpy).toHaveBeenCalledWith('\\\\wsl.localhost\\Ubuntu\\home\\alice\\project');
+    expect(readdirSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe('fs:read-dir through the shared gate', () => {
   const HOME = 'C:\\Users\\tester';
 

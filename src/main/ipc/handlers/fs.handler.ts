@@ -68,6 +68,36 @@ function homeRelativePath(
   return rootHome ? rootHome[1] ?? '' : null;
 }
 
+/**
+ * A path that lives in a DIFFERENT distribution than the location names.
+ *
+ * This is a correctness guard about which filesystem an answer came from, not
+ * a judgement about what is stored there: `toHostAccessiblePath` passes any
+ * `\\wsl.localhost\<distro>\…` spelling through verbatim, so without this an
+ * Ubuntu pane handed a Debian path would resolve it, list it, and present the
+ * result as its own directory.
+ *
+ * Asked at the raw input and at the canonical path — the two spellings that can
+ * carry a foreign distro. The converted path between them cannot: for a WSL
+ * location `toHostAccessiblePath` either returns a UNC it was already given
+ * (which the raw pass saw) or builds one out of `location.distro` itself, and
+ * collapsing `..` afterwards cannot change the distro, because it CLAMPS at the
+ * UNC share root instead of climbing past it —
+ * `\\wsl.localhost\Ubuntu\..\Debian\home` resolves to
+ * `\\wsl.localhost\Ubuntu\Debian\home`, still Ubuntu. Spelling a second
+ * namespace out does not escape either: it nests under the first, so
+ * `…\Ubuntu\home\..\..\..\..\wsl.localhost\Debian\x` becomes
+ * `\\wsl.localhost\Ubuntu\wsl.localhost\Debian\x`, whose distro is still the
+ * pane's own.
+ */
+function isForeignDistroPath(
+  location: SessionLocation,
+  candidatePath: string,
+): boolean {
+  const guest = toWslGuestPath(location, candidatePath);
+  return !guest.ok && guest.error === 'WSL_DISTRO_MISMATCH';
+}
+
 export function isSensitivePath(
   resolvedPath: string,
   location?: SessionLocation,
@@ -81,7 +111,6 @@ export function isSensitivePath(
   }
 
   const guest = toWslGuestPath(location, resolvedPath);
-  if (!guest.ok && guest.error === 'WSL_DISTRO_MISMATCH') return true;
   const homeRelative = homeRelativePath(resolvedPath, guest.ok ? guest.path : null);
   return homeRelative !== null && isBlockedHomeRelative(homeRelative);
 }
@@ -160,6 +189,9 @@ type PathClearance =
  *     symlink into `~/.ssh` while happily running git inside it, which is the
  *     whole invariant.
  *
+ * Passes 1 and 3 also ask `isForeignDistroPath`, which is a separate question
+ * with its own reachability — see its comment.
+ *
  * Fails closed: a path the host cannot canonicalise is one nothing cleared,
  * not one nothing objected to. An unconvertible guest path is different — there
  * is no host spelling to resolve, pass 1 already cleared the cwd, and whether
@@ -171,6 +203,7 @@ async function clearSensitivePath(
   inputPath: string,
   convert: LocationPathOperation,
 ): Promise<PathClearance> {
+  if (isForeignDistroPath(location, inputPath)) return { refused: true };
   if (isSensitivePath(inputPath, location)) return { refused: true };
 
   const accessible = convert(location, inputPath);
@@ -180,6 +213,7 @@ async function clearSensitivePath(
 
   try {
     const canonical = await fs.promises.realpath(resolved);
+    if (isForeignDistroPath(location, canonical)) return { refused: true };
     return isSensitivePath(canonical, location)
       ? { refused: true }
       : { refused: false, canonical };
