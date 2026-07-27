@@ -52,13 +52,13 @@ function reloadButton(): HTMLButtonElement {
 }
 
 describe('EditorPanel — the file read carries the file origin', () => {
-  it('passes the location on mount', async () => {
+  it('passes the file origin on mount', async () => {
     await mount(HOST);
     expect(readFile).toHaveBeenCalledWith('C:\\dev\\fmux\\README.md', HOST);
     expect(container.textContent).toContain('file body');
   });
 
-  it('passes the same location on Reload', async () => {
+  it('passes the same file origin on Reload', async () => {
     await mount(HOST);
     readFile.mockClear();
 
