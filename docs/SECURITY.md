@@ -28,7 +28,9 @@ The following are first-class commitments. Regressions here are bugs.
 - POSIX (`macOS`, `Linux`): `~/.fmux/` and every file inside it are created with mode `0o600` (owner read/write only). Directories are `0o700`.
 - Windows: `%USERPROFILE%\.fmux\` inherits the default user profile ACL. The substrate relies on the OS user profile boundary as the trust line — same-user processes can read substrate files; other users on the same machine cannot.
 
-> **Note (2026-05-16):** an earlier draft of this document described additional Windows-side `icacls` hardening and cloud-sync exclusion signals applied by the daemon on startup. That code path produced a broken ACL state in user-dogfood testing (lock-out of the owner) and was reverted. Any future hardening over what `0o600` / the default user profile ACL provides will be re-introduced only after dogfood passes on a real `%USERPROFILE%\.fmux\` directory, not just a fresh-tmpdir dynamic test.
+> **Note (2026-05-16):** an earlier draft of this document described additional Windows-side `icacls` hardening and cloud-sync exclusion signals applied by the daemon on startup. That code path produced a broken ACL state in user-dogfood testing — `/inheritance:r` removed the owner's `WRITE_DAC`, so the subsequent `/grant:r` failed silently and locked the owner out — and was reverted. It passed `scripts/substrate-hardening-dynamic.mjs` because a fresh `mkdtempSync` directory has a different ACL constitution from a long-lived profile-scoped folder, so the test could not see the production-only regression.
+>
+> Any future hardening beyond what `0o600` / the default user profile ACL provides must (a) grant the owner explicit `(OI)(CI)F` *before* removing inherited ACEs, and (b) be dogfooded against a real `%USERPROFILE%\.fmux\` directory, not just a fresh-tmpdir dynamic test.
 
 ### 1.2 Named Pipe authentication
 
@@ -165,13 +167,3 @@ This section binds anyone — contributor, reviewer, auditor, or AI agent — pr
 > **Worked example.** The `fs.handler` blocklist that refused to list `~/.ssh` failed every test above: no caller ever passed an arbitrary path, a compromised renderer could call `pty:create` and spawn a shell regardless, and §3 already declares same-user disclosure out of scope. Its cost was a silently empty file explorer for anyone who legitimately `cd`'d into a credential directory. See [#48](https://github.com/skflowne/fmux/issues/48).
 
 Controls that *do* clear this bar are welcome; §1 is where they land once they are real.
-
----
-
-## 7. Change log
-
-| Date | Change |
-|---|---|
-| 2026-07-27 | Forge Mux fork audit. (a) §5 was directing vulnerability reports to the upstream wmux repository, which this fork does not control — now routed to `skflowne/fmux`. (b) On-disk paths corrected from `~/.wmux/` to the `~/.fmux/` namespace this fork actually uses (`shared/constants.ts`); the 2026-05-16 row below is left as written, being a record of what happened upstream at the time. (c) Per-plugin permission enforcement moved out of §1 "guarantees" into §2.5 "declared but not guaranteed" — it was listed among commitments whose regressions are bugs while enforcement is incomplete, and cited `plans/generic-wandering-teapot.md`, which does not exist in this repository. Old §1.4 renumbered to §1.3. (d) §1.2 split into subsections; no technical claim changed. (e) §3 now states explicitly that the same-user carve-out is why the app ships no path blocklists on its own read APIs. (f) Added §6, the evidence bar a proposed security control must clear — callers, concrete impact, and a check against §3 — so this document governs what gets added to it. Change log renumbered to §7. |
-| 2026-05-16 | Initial draft (#41). Declared icacls + attrib + notice-file hardening signals + `mcp.claimWorkspace` enforcement. |
-| 2026-05-16 | Reverted icacls/attrib/notice-file claims (§1.2 and §1.3 of the original draft). Dogfood on a real `%USERPROFILE%\.wmux\` directory produced a broken ACL state (`/inheritance:r` removed the owner's WRITE_DAC, and the subsequent `/grant:r` failed silently). The dynamic test (`scripts/substrate-hardening-dynamic.mjs`) had passed on a fresh `mkdtempSync` directory whose ACL constitution is different from a long-lived profile-scoped folder; the test did not catch the production-only regression. Phase 3.2 hardening will be re-attempted only after a hardening helper that (a) grants the owner explicit `(OI)(CI)F` *before* removing inherited ACEs and (b) is dogfooded against a real user profile passes. |
