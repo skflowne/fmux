@@ -25,7 +25,6 @@ declare global {
       fs?: {
         readDir: (dirPath: string, location: SessionLocation) => Promise<{ name: string; path: string; isDirectory: boolean; isSymlink: boolean }[]>;
         readFile: (filePath: string, location: SessionLocation) => Promise<string | null>;
-        writeFile: (filePath: string, content: string, location: SessionLocation) => Promise<boolean>;
         watch: (dirPath: string, location: SessionLocation) => Promise<boolean>;
         unwatch: (dirPath: string, location: SessionLocation) => Promise<void>;
         onChanged: (callback: (dirPath: string) => void) => () => void;

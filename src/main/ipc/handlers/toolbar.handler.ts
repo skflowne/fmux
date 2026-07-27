@@ -7,7 +7,6 @@ import {
 import { wrapHandler } from '../wrapHandler';
 import { git } from '../../git/git';
 import { locationCommandTarget, type PaneCommandTarget } from '../../git/paneCommand';
-import { refusesSensitivePath } from './fs.handler';
 
 /** The live pane behind a location, when one exists — see metadata.handler's
  *  `findPaneCommandTargetForLocation`. Injected so this handler does not import
@@ -31,15 +30,16 @@ export function registerToolbarHandlers(
   // location, because the active-session context the API demands for a guest is
   // the pane's; a location no pane is running in is refused there.
   //
-  // The one thing lost with the old `resolveAccessiblePath` conversion is its
-  // sensitive-path refusal, so this channel asks fs.handler's gate for the same
-  // verdict rather than restating it: `fs.readDir` declines to list `~/.ssh`,
-  // and this channel must not report its contents through git instead.
+  // Nothing here inspects the host filesystem first. This channel used to ask
+  // fs.handler's sensitive-path gate, which for a WSL pane meant one host
+  // `realpath` over the 9p share per call — the last thing this command sent
+  // over the share after issue #30 moved git itself into the guest. Issue #48
+  // removed the blocklist that refusal implemented, so the round trip went
+  // with it: a directory the pane can `cd` into is one it can have badges for.
   ipcMain.removeHandler(IPC.GIT_STATUS);
   ipcMain.handle(IPC.GIT_STATUS, wrapHandler(IPC.GIT_STATUS, async (_event: Electron.IpcMainInvokeEvent, raw: unknown): Promise<string> => {
     const location = parseSessionLocation(raw);
     if (!location) return '';
-    if (await refusesSensitivePath(location)) return '';
     const target = findLivePaneTarget(location) ?? locationCommandTarget(location);
     const result = await git(['status', '--porcelain'], target);
     // Fail-soft, as the renderer expects: any refusal or git error is "no

@@ -1,13 +1,7 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  isSensitivePath,
-  refusesSensitivePath,
-  registerFsHandlers,
-  resolveAccessiblePath,
-} from '../fs.handler';
+import { registerFsHandlers, resolveAccessiblePath } from '../fs.handler';
 import { ipcMain } from 'electron';
 
 vi.mock('electron', () => ({
@@ -21,12 +15,10 @@ vi.mock('electron', () => ({
   },
 }));
 
-describe('fs.handler security helpers', () => {
-  // Use an OS-native absolute home path. The previous Windows-only hardcode
-  // (`path.join('C:', 'Users', 'tester')`) produced "C:/Users/tester" on
-  // Unix, which path.resolve treats as a relative segment under cwd. The
-  // resulting absolute path no longer prefix-matches `home`, so
-  // isSensitivePath returned false and realpath was unexpectedly called.
+describe('resolveAccessiblePath', () => {
+  // An OS-native absolute home path: `path.join('C:', 'Users', 'tester')`
+  // produces "C:/Users/tester" on Unix, which `path.resolve` treats as a
+  // relative segment under the cwd.
   const home = process.platform === 'win32'
     ? path.join('C:', 'Users', 'tester')
     : path.join('/home', 'tester');
@@ -34,7 +26,6 @@ describe('fs.handler security helpers', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(os, 'homedir').mockReturnValue(home);
     realpathSpy = vi.spyOn(fs.promises, 'realpath');
   });
 
@@ -42,68 +33,14 @@ describe('fs.handler security helpers', () => {
     vi.restoreAllMocks();
   });
 
-  it('treats the daemon auth token path as sensitive', () => {
-    expect(isSensitivePath(path.join(home, '.fmux', 'daemon-auth-token'))).toBe(true);
-  });
-
-  it.each([
-    ['blocked directory', '.ssh', true],
-    ['blocked directory descendant', '.ssh/id_rsa', true],
-    ['blocked file', '.npmrc', true],
-    ['directory prefix neighbor', '.ssh-backup/id_rsa', false],
-    ['file prefix neighbor', '.npmrc.old', false],
-  ])('applies the same home-relative boundary to host and WSL: %s', (_name, relative, blocked) => {
-    const hostPath = path.join(home, ...relative.split('/'));
-    const wslPath = `/home/alice/${relative}`;
-    const wslLocation = {
-      domain: 'wsl' as const,
-      cwd: '/home/alice/project',
-      shell: 'wsl.exe',
-      distro: 'Ubuntu',
-    };
-
-    expect(isSensitivePath(hostPath)).toBe(blocked);
-    expect(isSensitivePath(wslPath, wslLocation)).toBe(blocked);
-    expect(isSensitivePath(
-      `\\\\wsl.localhost\\Ubuntu${wslPath.replace(/\//g, '\\')}`,
-      wslLocation,
-    )).toBe(blocked);
-  });
-
-  it('fails closed before conversion for a WSL namespace from another distro', async () => {
-    const mismatched = '\\\\wsl.localhost\\Debian\\home\\alice\\.ssh\\id_rsa';
-    const convert = vi.fn(() => ({ ok: true as const, path: mismatched }));
-
-    await expect(resolveAccessiblePath(
-      mismatched,
-      { domain: 'wsl', cwd: '/home/alice/project', shell: 'wsl.exe', distro: 'Ubuntu' },
-      convert,
-    )).resolves.toBeNull();
-
-    expect(convert).not.toHaveBeenCalled();
-    expect(realpathSpy).not.toHaveBeenCalled();
-  });
-
-  it('rejects a symlink whose canonical target is sensitive', async () => {
-    realpathSpy.mockResolvedValue(path.join(home, '.ssh', 'id_rsa'));
-
-    await expect(resolveAccessiblePath(path.join(home, 'project', 'link-to-secret'))).resolves.toBeNull();
-  });
-
-  it('rejects a direct sensitive path before canonical lookup', async () => {
-    await expect(resolveAccessiblePath(path.join(home, '.fmux-auth-token'))).resolves.toBeNull();
-    expect(realpathSpy).not.toHaveBeenCalled();
-  });
-
-  it('returns the canonical path for an allowed target', async () => {
+  it('returns the canonical path for a target that exists', async () => {
     const canonical = path.join(home, 'project', 'src', 'index.ts');
     realpathSpy.mockResolvedValue(canonical);
 
     await expect(resolveAccessiblePath(path.join(home, 'project', 'src', '..', 'src', 'index.ts'))).resolves.toBe(canonical);
-    // One canonicalisation, and the path returned is the one the gate vetted.
-    // Clearing the path and then resolving it again would both waste the
-    // syscall and open the window where the second answer is a link the first
-    // was not.
+    // One canonicalisation, and the path returned is the one it produced.
+    // Resolving a second time would both waste the syscall and open the window
+    // where the second answer is a link the first was not.
     expect(realpathSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -113,7 +50,7 @@ describe('fs.handler security helpers', () => {
     await expect(resolveAccessiblePath(path.join(home, 'project', 'missing.txt'))).resolves.toBeNull();
   });
 
-  it('converts a WSL path before canonicalization and security checks', async () => {
+  it('converts a WSL path before canonicalization', async () => {
     const guestPath = '/home/me/project/src';
     const hostPath = path.join(home, 'converted', 'project', 'src');
     realpathSpy.mockResolvedValue(hostPath);
@@ -132,46 +69,52 @@ describe('fs.handler security helpers', () => {
     expect(realpathSpy).toHaveBeenCalledWith(path.resolve(hostPath));
   });
 
-  it.each([
-    '/home/alice/.ssh/id_rsa',
-    '/home/alice/.aws/credentials',
-    '/root/.gnupg/private-keys-v1.d/key',
-    '/root/.fmux/daemon-auth-token',
-  ])('rejects a direct WSL home secret before conversion: %s', async (guestPath) => {
-    const convert = vi.fn(() => ({
-      ok: true as const,
-      path: `\\\\wsl.localhost\\Ubuntu${guestPath.replace(/\//g, '\\')}`,
-    }));
-
-    await expect(resolveAccessiblePath(
-      guestPath,
-      { domain: 'wsl', cwd: '/home/alice/project', shell: 'wsl.exe', distro: 'Ubuntu' },
-      convert,
-    )).resolves.toBeNull();
-
-    expect(convert).not.toHaveBeenCalled();
-    expect(realpathSpy).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    '\\\\wsl.localhost\\Ubuntu\\home\\alice\\.ssh\\id_rsa',
-    '\\\\wsl$\\Ubuntu\\root\\.npmrc',
-  ])('rejects a canonical WSL home secret reached through a link: %s', async (canonical) => {
-    const guestPath = '/home/alice/project/link';
+  it('canonicalises a WSL UNC path in its own shape, not the running platform\'s', async () => {
+    // The UNC spelling verbatim. `resolveInPathShape` picks win32 or posix from
+    // how the path is WRITTEN, so this is what distinguishes it from a platform
+    // `path.resolve`, which on the POSIX CI legs would prefix it with the cwd.
     const accessible = '\\\\wsl.localhost\\Ubuntu\\home\\alice\\project\\link';
-    realpathSpy.mockResolvedValue(canonical);
+    realpathSpy.mockResolvedValue(accessible);
 
     await expect(resolveAccessiblePath(
-      guestPath,
+      '/home/alice/project/link',
       { domain: 'wsl', cwd: '/home/alice/project', shell: 'wsl.exe', distro: 'Ubuntu' },
       vi.fn(() => ({ ok: true as const, path: accessible })),
-    )).resolves.toBeNull();
+    )).resolves.toBe(accessible);
 
-    // The UNC spelling verbatim: a Windows-shaped path is resolved in its own
-    // shape, so this is also what distinguishes the gate from a platform
-    // `path.resolve`, which on the POSIX CI legs would prefix it with the cwd.
     expect(realpathSpy).toHaveBeenCalledWith(accessible);
   });
+
+  it('collapses `..` in the spelling the path is written in', async () => {
+    // A Windows path whichever OS reads it: a platform `path.resolve` on the
+    // POSIX legs would neither collapse the segment nor keep the drive prefix.
+    const accessible = 'C:\\Users\\tester\\proj\\..\\other';
+    realpathSpy.mockImplementation(async (target: unknown) => target as string);
+
+    await expect(resolveAccessiblePath(
+      '/c/Users/tester/proj/../other',
+      { domain: 'msys', cwd: '/c/Users/tester/proj', shell: 'C:\\Program Files\\Git\\bin\\bash.exe' },
+      vi.fn(() => ({ ok: true as const, path: accessible })),
+    )).resolves.toBe('C:\\Users\\tester\\other');
+  });
+
+  // A rooted backslash path is Windows-shaped only by virtue of running on
+  // Windows — it carries neither a drive letter nor a UNC prefix — so this is
+  // the one case the shape sniff alone would get wrong, and the one the
+  // platform disjunct exists for. Windows-only by nature: the same string is a
+  // legal single-segment filename on Linux.
+  it.runIf(process.platform === 'win32')(
+    'collapses a rooted backslash path where the host is what makes it Windows-shaped',
+    async () => {
+      const drive = path.win32.resolve('\\').slice(0, 2);
+      realpathSpy.mockImplementation(async (target: unknown) => target as string);
+
+      await expect(resolveAccessiblePath(
+        '\\Users\\tester\\proj\\..\\other',
+        { domain: 'host', cwd: '\\Users\\tester\\proj', shell: '' },
+      )).resolves.toBe(`${drive}\\Users\\tester\\other`);
+    },
+  );
 
   it('fails softly when WSL conversion requires a missing distro', async () => {
     await expect(resolveAccessiblePath(
@@ -197,7 +140,7 @@ describe('fs.handler security helpers', () => {
         location: { domain: 'host', cwd: hostPath, shell: 'pwsh.exe' },
       },
     )).resolves.toEqual([]);
-    expect(realpathSpy).toHaveBeenCalled();
+    expect(realpathSpy).toHaveBeenCalledWith(hostPath);
   });
 
   // Issue #21: `msys` is a legal wire domain. The handler used to re-declare
@@ -229,108 +172,111 @@ describe('fs.handler security helpers', () => {
 });
 
 /**
- * The three-pass gate itself, which `fs.readDir` and `git:status` now share.
- * Asserted here on the export rather than through either handler, so the table
- * is the gate's own contract and not one channel's reading of it.
+ * The cross-distro refusal, which is about WHICH filesystem an answer came
+ * from and not about what is stored there — so both cases below use a plainly
+ * innocent project directory. A credential path would be refused for a second,
+ * independent reason and would not pin this guard at all.
  *
- * Windows spellings and a Windows home throughout: MSYS and WSL locations only
- * exist on Windows, and the passes are string logic, so the table holds on
- * every CI leg.
+ * Driven through `fs:read-dir` rather than the helper, so the specs fail if the
+ * guard exists but nothing calls it. An empty listing is also what a FAILED
+ * read returns, so each refusal is pinned on the directory never being opened.
  */
-describe('refusesSensitivePath', () => {
-  const HOME = 'C:\\Users\\tester';
-  const MSYS_SHELL = 'C:\\Program Files\\Git\\bin\\bash.exe';
-  const msys = (cwd: string) => ({ domain: 'msys' as const, cwd, shell: MSYS_SHELL });
+describe('a path in another WSL distribution', () => {
+  const UBUNTU = {
+    domain: 'wsl' as const,
+    cwd: '/home/alice/project',
+    shell: 'wsl.exe',
+    distro: 'Ubuntu',
+  };
+  const DEBIAN_PATH = '\\\\wsl.localhost\\Debian\\home\\alice\\project';
   let realpathSpy: ReturnType<typeof vi.spyOn>;
+  let readdirSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(os, 'homedir').mockReturnValue(HOME);
     realpathSpy = vi.spyOn(fs.promises, 'realpath')
       .mockImplementation(async (target) => target as string) as never;
+    readdirSpy = vi.spyOn(fs.promises, 'readdir').mockResolvedValue([] as never);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('refuses the raw guest cwd before any conversion', async () => {
-    await expect(refusesSensitivePath(msys('/c/Users/tester/.ssh'))).resolves.toBe(true);
+  function readDir(): (...args: unknown[]) => unknown {
+    registerFsHandlers();
+    const fn = vi.mocked(ipcMain.handle).mock.calls
+      .find(([channel]) => channel === 'fs:read-dir')?.[1];
+    if (!fn) throw new Error('fs:read-dir handler is not registered');
+    return fn as (...args: unknown[]) => unknown;
+  }
+
+  it('is refused before conversion when the request names it outright', async () => {
+    await expect(readDir()(
+      {} as Electron.IpcMainInvokeEvent,
+      { path: DEBIAN_PATH, location: UBUNTU },
+    )).resolves.toEqual([]);
+
+    expect(readdirSpy).not.toHaveBeenCalled();
+    // Load-bearing, not colour: this is the ONLY thing separating this spec
+    // from the canonical-pass one below. With `realpath` mocked to identity the
+    // canonical here is the Debian path too, so the readdir pin alone would
+    // stay green on a build that had lost the raw check entirely.
     expect(realpathSpy).not.toHaveBeenCalled();
   });
 
-  it('refuses a path that only collapses into a credential directory once resolved', async () => {
-    // `..` is collapsed in the spelling the path is WRITTEN in, not the one the
-    // running platform uses: this is a Windows path whichever OS reads it, and
-    // a platform `path.resolve` on the POSIX legs would neither collapse the
-    // segment nor keep the drive prefix, so nothing would match home.
-    await expect(refusesSensitivePath(msys('/c/Users/tester/proj/../.ssh'))).resolves.toBe(true);
-  });
+  it('is refused before the location is even asked for a host spelling', async () => {
+    // The ordering claim the channel cannot make, since it supplies its own
+    // conversion: nothing is converted, so the refusal cannot be a side effect
+    // of conversion failing.
+    const convert = vi.fn(() => ({ ok: true as const, path: DEBIAN_PATH }));
 
-  it('refuses a junction whose canonical target is a credential directory', async () => {
-    realpathSpy.mockResolvedValue(`${HOME}\\.ssh` as never);
-    await expect(refusesSensitivePath(msys('/c/dev/proj'))).resolves.toBe(true);
-  });
+    await expect(resolveAccessiblePath(DEBIAN_PATH, UBUNTU, convert)).resolves.toBeNull();
 
-  it('fails closed on a path it cannot canonicalise', async () => {
-    realpathSpy.mockRejectedValue(new Error('ENOENT') as never);
-    await expect(refusesSensitivePath(msys('/c/dev/proj'))).resolves.toBe(true);
-  });
-
-  it('clears an innocent location', async () => {
-    await expect(refusesSensitivePath(msys('/c/dev/proj'))).resolves.toBe(false);
-    expect(realpathSpy).toHaveBeenCalledWith('C:\\dev\\proj');
-  });
-
-  it('takes the path under test over the location cwd when given one', async () => {
-    await expect(
-      refusesSensitivePath(msys('/c/dev/proj'), '/c/Users/tester/.aws'),
-    ).resolves.toBe(true);
-  });
-
-  // A rooted backslash path is Windows-shaped only by virtue of running on
-  // Windows — it carries neither a drive letter nor a UNC prefix — so this is
-  // the one case the shape sniff alone would get wrong, and the one the
-  // platform disjunct exists for. Windows-only by nature: the same string is a
-  // legal single-segment filename on Linux.
-  it.runIf(process.platform === 'win32')(
-    'collapses a rooted backslash path where the host is what makes it Windows-shaped',
-    async () => {
-      const drive = path.win32.resolve('\\').slice(0, 2);
-      vi.spyOn(os, 'homedir').mockReturnValue(`${drive}\\Users\\tester`);
-
-      await expect(refusesSensitivePath(
-        { domain: 'host', cwd: '\\Users\\tester\\proj\\..\\.ssh', shell: '' },
-      )).resolves.toBe(true);
-    },
-  );
-
-  it('does not refuse a guest path that has no host spelling', async () => {
-    // Unconvertible is not sensitive. The raw pass already cleared the cwd, and
-    // whether a distro-less WSL location may run anything is the execution
-    // API's rule, not this gate's.
-    await expect(refusesSensitivePath(
-      { domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe' },
-    )).resolves.toBe(false);
+    expect(convert).not.toHaveBeenCalled();
     expect(realpathSpy).not.toHaveBeenCalled();
+  });
+
+  it('is refused at the canonical path when a link reaches it', async () => {
+    // Innocent raw and innocent converted: only the canonical pass can see
+    // that the directory the pane would be shown lives in another guest.
+    realpathSpy.mockResolvedValue(DEBIAN_PATH as never);
+
+    await expect(readDir()(
+      {} as Electron.IpcMainInvokeEvent,
+      { path: '/home/alice/project', location: UBUNTU },
+    )).resolves.toEqual([]);
+
+    expect(realpathSpy).toHaveBeenCalledWith('\\\\wsl.localhost\\Ubuntu\\home\\alice\\project');
+    expect(readdirSpy).not.toHaveBeenCalled();
   });
 });
 
-describe('fs:read-dir through the shared gate', () => {
+/**
+ * Issue #48's headline complaint, as a spec: `cd ~/.ssh` in a pane used to
+ * render an empty file explorer, indistinguishable from an empty directory,
+ * with no error and the terminal an inch away showing the contents.
+ *
+ * Asserting the entries come back — not merely that the call succeeds — is the
+ * point: `[]` is what the old refusal returned, so a spec that only checked for
+ * no throw would pass against the blocklist it exists to prove is gone.
+ */
+describe('fs:read-dir in a credential directory', () => {
   const HOME = 'C:\\Users\\tester';
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(os, 'homedir').mockReturnValue(HOME);
     vi.spyOn(fs.promises, 'realpath').mockImplementation(async (t) => t as string);
-    vi.spyOn(fs.promises, 'readdir').mockResolvedValue([] as never);
+    vi.spyOn(fs.promises, 'readdir').mockResolvedValue([
+      { name: 'id_rsa', isDirectory: () => false, isSymbolicLink: () => false },
+    ] as never);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('refuses an MSYS path that resolves into a credential directory', async () => {
+  it('lists it, at the path the `..` collapsed to', async () => {
     registerFsHandlers();
     const readDir = vi.mocked(ipcMain.handle).mock.calls
       .find(([channel]) => channel === 'fs:read-dir')?.[1];
@@ -346,7 +292,11 @@ describe('fs:read-dir through the shared gate', () => {
           shell: 'C:\\Program Files\\Git\\bin\\bash.exe',
         },
       },
-    )).resolves.toEqual([]);
-    expect(fs.promises.readdir).not.toHaveBeenCalled();
+    )).resolves.toEqual([
+      { name: 'id_rsa', path: path.join(`${HOME}\\.ssh`, 'id_rsa'), isDirectory: false, isSymlink: false },
+    ]);
+    // The converted-and-collapsed spelling, which also re-homes the `..` claim
+    // the deleted blocklist specs used to carry.
+    expect(fs.promises.readdir).toHaveBeenCalledWith(`${HOME}\\.ssh`, { withFileTypes: true });
   });
 });
