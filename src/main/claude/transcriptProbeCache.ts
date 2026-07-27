@@ -9,7 +9,9 @@
  * long as the guest stays unreachable — past `ttlMs`, without limit. That is
  * deliberate: discarding a retained answer because the guest went idle is the
  * "could not look" → "it is not there" collapse this module exists to prevent.
- * An answer is at most `ttlMs` old only while the guest can still answer.
+ * `ttlMs` bounds when revalidation is *started*, never how old the answer a poll
+ * is handed can be: the refresh runs out of band, so a stale answer is served
+ * across it by design, and an unanswerable guest holds it indefinitely.
  *
  * Why this is its own module. The host branch of a transcript liveness probe is
  * one local `lstat`, but the WSL branch spawns `wsl.exe` and blocks for up to
@@ -126,16 +128,19 @@ export function createTranscriptProbeCache(
   const inFlight = new Set<Promise<void>>();
 
   /**
-   * The only writer of `answer`, and the only writer of `attemptedAt` that any
-   * later read observes.
+   * The only writer of `answer`.
    *
-   * Both the first blocking probe and every out-of-band refresh land here, which
-   * is what keeps the error rule single: an outcome that could not look is
-   * recorded as an attempt and nothing else. The stamp sits *above* the answered
-   * guard because a failed attempt is exactly what the retry throttle exists to
-   * space out. `ensureRefresh` stamps the same field when an attempt starts, to
-   * hold the gate shut while it runs; this stamp supersedes it on completion, so
-   * a probe that failed slowly is not due again the moment it returns.
+   * Both the first blocking probe and every out-of-band refresh that settles land
+   * here, which is what keeps the error rule single: an outcome that could not
+   * look is recorded as an attempt and nothing else. The stamp sits *above* the
+   * answered guard because a failed attempt is exactly what the retry throttle
+   * exists to space out; it supersedes the one `ensureRefresh` takes when the
+   * attempt starts, so a probe that settled `unreachable` slowly is not due again
+   * the moment it returns.
+   *
+   * A refresh that *rejects* never reaches here — `ensureRefresh` swallows it —
+   * so on that one path the start stamp is the throttle, and the next retry is
+   * spaced from when the attempt began.
    */
   function record(key: string, outcome: ProbeOutcome): void {
     const entry = entries.get(key);
@@ -179,6 +184,9 @@ export function createTranscriptProbeCache(
     // answered for has no answer timestamp to age, and retrying it on every poll
     // would keep waking an idle distro indefinitely.
     if (clock() - entry.attemptedAt < ttlMs) return;
+    // Stamped before the attempt, not only after it: a refresh that rejects is
+    // swallowed below without reaching `record`, and with no stamp at all every
+    // later poll would re-spawn against the guest that just failed.
     entry.attemptedAt = clock();
     const pending: Promise<void> = (async () => {
       try {

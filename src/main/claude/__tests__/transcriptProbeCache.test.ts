@@ -132,6 +132,8 @@ describe('transcript probe cache', () => {
     expect(cache.lives('k', probe, refresh.calls)).toBe(true);
     expect(refresh.calls).toHaveBeenCalledTimes(2);
     expect(cache.answerFor('k')).toBeNull();
+    // Nothing on this path ever re-entered the blocking probe.
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 
   it('serves the cached answer until the TTL expires, then refreshes exactly once', async () => {
@@ -212,6 +214,33 @@ describe('transcript probe cache', () => {
     expect(cache.lives('k', () => answered(true), refresh)).toBe(true);
     await cache.whenIdle();
     expect(cache.answerFor('k')).toEqual({ lives: true, at: 1_000 });
+  });
+
+  it('throttles the retry after a rejected refresh from when the attempt started', async () => {
+    const clock = testClock();
+    const cache = makeCache(clock.now);
+    const probe = vi.fn(() => answered(true));
+    let fail!: (error: Error) => void;
+    const refresh = vi.fn(() => new Promise<ProbeOutcome>((_, reject) => { fail = reject; }));
+
+    expect(cache.lives('k', probe, refresh)).toBe(true);
+    clock.advance(TTL);
+    expect(cache.lives('k', probe, refresh)).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    fail(new Error('spawn failed'));
+    await cache.whenIdle();
+    // A rejection never reaches `record`, so the stamp taken when the attempt
+    // started is the only throttle this path has. Without it the entry comes back
+    // already due and every later poll re-spawns wsl.exe against the guest that
+    // just failed — the per-poll spawn storm the cache exists to prevent.
+    expect(cache.lives('k', probe, refresh)).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    clock.advance(TTL);
+    expect(cache.lives('k', probe, refresh)).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 
   it('lets a later refresh answer a key that was never answered for', async () => {
