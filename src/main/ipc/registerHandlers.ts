@@ -16,6 +16,7 @@ import { registerPTYHandlers } from './handlers/pty.handler';
 import { registerShellHandlers } from './handlers/shell.handler';
 import { registerFontHandlers } from './handlers/fonts.handler';
 import {
+  findPaneCommandTargetForLocation,
   getPaneCommandTarget,
   registerMetadataHandlers,
 } from './handlers/metadata.handler';
@@ -183,7 +184,7 @@ export function registerAllHandlers(
   registerHooksBridgeHandlers();
   registerStatuslineBridgeHandlers();
   const cleanupFs = registerFsHandlers();
-  const cleanupToolbar = registerToolbarHandlers();
+  const cleanupToolbar = registerToolbarHandlers(findPaneCommandTargetForLocation);
   // J2 — diff:read / diff:applyHunks. Git-only (daemon-independent) — always registered.
   const cleanupDiff = registerDiffHandlers();
   // Deck Git tab — worktree list/add/remove. Git-only (daemon-independent) — always registered.

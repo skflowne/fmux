@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The file explorer's change badges for a WSL pane are now produced inside the distribution.** The toolbar asked Windows `git` to inspect the guest directory over the `\\wsl.localhost` share — slow on a large repository, and dependent on the pane having already published which distribution it belongs to. The status now runs in the guest, like every other Git command the app issues for a WSL pane. A location no live pane is running in reports no badges rather than starting a distribution to answer it, and a directory the file explorer refuses to list (`~/.ssh` and the other credential paths) is still refused here.
+
 - **Session-location edge cases no longer send panes or filesystem work to the wrong place.** Stored pane locations remain authoritative even when a legacy cwd field is empty, shell-less Windows workspaces keep their host cwd, both WSL UNC namespaces pass host validation, overlapping WSL distribution names resolve to the longest match, and an unconvertible Git Bash recovery path is reported as degraded instead of silently appearing to recover in the Windows home directory.
 
 - **Host, Git Bash, and WSL sessions now keep their filesystem operations in the pane's own location.** Session recovery, project discovery, file browsing, Git and GitHub commands, transcript reads, and terminal path links share one domain-aware path model, so Linux paths are no longer mistaken for Windows paths and identical paths in different WSL distributions no longer share cache or resume identities.
