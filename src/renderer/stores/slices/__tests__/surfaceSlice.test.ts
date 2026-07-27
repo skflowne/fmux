@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspace, type Workspace } from '../../../../shared/types';
 import { createSurfaceSlice } from '../surfaceSlice';
 
@@ -25,6 +25,14 @@ function createHarness() {
   const slice = createSurfaceSlice(set as never, (() => state) as never, {} as never);
   return { state, slice };
 }
+
+beforeEach(() => {
+  vi.stubGlobal('window', { electronAPI: { platform: process.platform } });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('surfaceSlice.addSurface — workspace targeting (#236)', () => {
   it('lands the surface in a background workspace when workspaceId is given', () => {
@@ -438,5 +446,78 @@ describe('surfaceSlice.closeSurface — surfaceActivity cleanup (Fleet activity 
 
     expect(state.surfaceActivity['pty-1']).toBeUndefined();
     expect(state.surfaceActivity['pty-2']).toBe('✎ keep.ts');
+  });
+});
+
+// An editor surface has no cwd and no shell of its own, so its location has to
+// be decided when the surface is created — the render tree used to re-derive
+// it from an arbitrary sibling terminal on every paint, in two places.
+describe('surfaceSlice.addEditorSurface — the location is owned at creation', () => {
+  it('stores the location the opener resolved', () => {
+    const { state, slice } = createHarness();
+    const paneId = state.workspaces[0].rootPane.id;
+    const location = {
+      domain: 'wsl' as const,
+      cwd: '/home/me/proj',
+      shell: 'wsl.exe',
+      distro: 'Ubuntu',
+    };
+
+    slice.addEditorSurface(paneId, '/home/me/proj/README.md', location);
+
+    const pane = state.workspaces[0].rootPane;
+    if (pane.type !== 'leaf') throw new Error('expected leaf pane');
+    expect(pane.surfaces[0].location).toEqual(location);
+  });
+
+  it('resolves from the pane it opens in when the opener passes none', () => {
+    const { state, slice } = createHarness();
+    const paneId = state.workspaces[0].rootPane.id;
+    slice.addSurface(paneId, 'pty-1', 'wsl.exe', '/home/me/proj');
+
+    slice.addEditorSurface(paneId, '/home/me/proj/README.md');
+
+    const pane = state.workspaces[0].rootPane;
+    if (pane.type !== 'leaf') throw new Error('expected leaf pane');
+    const editor = pane.surfaces.find((s) => s.surfaceType === 'editor')!;
+    expect(editor.location).toEqual({
+      domain: 'wsl',
+      cwd: '/home/me/proj',
+      shell: 'wsl.exe',
+    });
+  });
+
+  // Issue #46 — the seed comes through the pane's ONE published-location door,
+  // so it follows that door's precedence: the pane's active terminal, not
+  // whichever terminal sits first in tab order. Both production callers pass an
+  // explicit location, so this rule is only reachable through the fallback —
+  // pinned here because it is the fallback's whole contract.
+  it('seeds from the pane active terminal, not its first', () => {
+    const { state, slice } = createHarness();
+    const paneId = state.workspaces[0].rootPane.id;
+    slice.addSurface(paneId, 'pty-1', 'pwsh.exe', 'C:\\dev\\first');
+    slice.addSurface(paneId, 'pty-2', 'pwsh.exe', 'C:\\dev\\second');
+
+    slice.addEditorSurface(paneId, 'C:\\dev\\second\\README.md');
+
+    const pane = state.workspaces[0].rootPane;
+    if (pane.type !== 'leaf') throw new Error('expected leaf pane');
+    const editor = pane.surfaces.find((s) => s.surfaceType === 'editor')!;
+    expect(editor.location).toEqual({
+      domain: 'host',
+      cwd: 'C:\\dev\\second',
+      shell: 'pwsh.exe',
+    });
+  });
+
+  it('leaves the location unset when the pane has no classifiable surface', () => {
+    const { state, slice } = createHarness();
+    const paneId = state.workspaces[0].rootPane.id;
+
+    slice.addEditorSurface(paneId, '/home/me/proj/README.md');
+
+    const pane = state.workspaces[0].rootPane;
+    if (pane.type !== 'leaf') throw new Error('expected leaf pane');
+    expect(pane.surfaces[0].location).toBeUndefined();
   });
 });

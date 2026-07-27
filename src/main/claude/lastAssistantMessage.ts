@@ -1,4 +1,14 @@
 import fs from 'node:fs';
+import { execFile, execFileSync } from 'node:child_process';
+import {
+  locationIdentity,
+  prepareLocationCommand,
+  toHostAccessiblePath,
+  type ActiveSessionContext,
+  type LocationError,
+  type SessionLocation,
+} from '../../shared/sessionLocation';
+import { createTranscriptProbeCache, type ProbeOutcome } from './transcriptProbeCache';
 
 /**
  * Read the tail of a Claude Code transcript and extract the final assistant
@@ -23,6 +33,7 @@ import fs from 'node:fs';
 /** Cap the tail we read. Transcripts grow to megabytes; the last message is at
  *  the end, and a bounded read keeps a stop-hook off the slow path. */
 const TAIL_BYTES = 256 * 1024;
+const WSL_READ_TIMEOUT_MS = 750;
 /** Cap what we hand to the orchestrator — enough to convey a question, not so
  *  much that one pane's essay dominates the wake prompt. */
 const MAX_TEXT = 600;
@@ -32,6 +43,423 @@ export interface LastAssistantMessage {
   text: string;
   /** True when the message reads as a question aimed at the human. */
   endsWithQuestion: boolean;
+}
+
+export interface TranscriptReadContext {
+  /** Location of the PTY that originated the hook, never inferred from the path. */
+  location: SessionLocation;
+  /** Verified live daemon session used to bind WSL execution to its distro. */
+  activeSession?: ActiveSessionContext;
+}
+
+export interface TranscriptCommandOptions {
+  timeout: number;
+  maxBuffer: number;
+  windowsHide: boolean;
+}
+
+export type TranscriptCommandRunner = (
+  file: string,
+  args: readonly string[],
+  options: TranscriptCommandOptions,
+) => Buffer;
+
+export type AsyncTranscriptCommandRunner = (
+  file: string,
+  args: readonly string[],
+  options: TranscriptCommandOptions,
+) => Promise<Buffer>;
+
+/**
+ * The two ways this module runs a guest command, injected as one unit.
+ *
+ * Call sites that need an answer now are synchronous; the probe cache's
+ * out-of-band refresh is not, and must not be, or it would block the daemon
+ * event loop it exists to protect. Binding both halves together is what lets a
+ * test replace the real pair wholesale — the previous design compared the
+ * injected runner against the real one by identity to decide whether a refresh
+ * was allowed to spawn, which put a production-vs-test check in production.
+ */
+export interface TranscriptProber {
+  sync: TranscriptCommandRunner;
+  async: AsyncTranscriptCommandRunner;
+}
+
+const runTranscriptCommand: TranscriptCommandRunner = (file, args, options) =>
+  execFileSync(file, [...args], options);
+
+const runTranscriptCommandAsync: AsyncTranscriptCommandRunner = (file, args, options) =>
+  new Promise((resolve, reject) => {
+    execFile(file, [...args], { ...options, encoding: 'buffer' }, (error, stdout, stderr) => {
+      // One rule, the same one `execFileSync` enforces for the synchronous half:
+      // a non-zero exit is never an answer. The guest helper swallows its own
+      // errors and always exits 0, so it cannot produce a failure carrying
+      // output; what can is `wsl.exe` writing a diagnostic to stdout for a
+      // renamed or removed distro. Reading that as a probe result classified the
+      // very same failure as "transcript gone" here and as "could not look"
+      // there — two error rules in the module that exists to have one.
+      if (error) {
+        reject(Object.assign(error, { stderr }));
+        return;
+      }
+      resolve(stdout);
+    });
+  });
+
+/**
+ * The pair every production call site runs on.
+ *
+ * Exported so a test can hold both halves against one real failing process:
+ * their agreement on what counts as an answer is a property of this pair, not of
+ * either function alone, and it cannot be observed through an injected runner.
+ */
+export const defaultProber: TranscriptProber = {
+  sync: runTranscriptCommand,
+  async: runTranscriptCommandAsync,
+};
+
+/**
+ * Accept either half of the seam.
+ *
+ * No production caller injects anything — the daemon and the hook RPC both take
+ * the default pair — so the lone-runner form exists for callers that replace
+ * command execution wholesale, i.e. tests. Such a caller drives the refresh with
+ * its own runner on a microtask, which is what keeps a test off a real
+ * `wsl.exe`. The trade to know: a caller that injected only a synchronous runner
+ * would run refreshes synchronously too, so a production call site must pass
+ * both halves or none.
+ */
+function toProber(run?: TranscriptCommandRunner | TranscriptProber): TranscriptProber {
+  if (!run) return defaultProber;
+  if (typeof run !== 'function') return run;
+  return {
+    sync: run,
+    async: (file, args, options) => Promise.resolve().then(() => run(file, args, options)),
+  };
+}
+
+function resolveHostTranscriptPath(
+  transcriptPath: string,
+  context?: TranscriptReadContext,
+): string | null {
+  if (!context) return transcriptPath;
+  const resolved = toHostAccessiblePath(context.location, transcriptPath);
+  return resolved.ok ? resolved.path : null;
+}
+
+/** Codes that describe a path, given that something could look at the path at
+ *  all. Every other code — EIO, EACCES, EPERM, ENETUNREACH from a bridge whose
+ *  guest is not running — describes the attempt instead. */
+const ABSENCE_ERROR_CODES: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR']);
+
+function isAbsenceError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return typeof code === 'string' && ABSENCE_ERROR_CODES.has(code);
+}
+
+/** Separator-agnostic: the same rule has to hold for a guest path and for a
+ *  `\\wsl.localhost\...` UNC one, on whichever platform the test suite runs. */
+function containingDirectoryOf(hostPath: string): string | null {
+  const cut = Math.max(hostPath.lastIndexOf('/'), hostPath.lastIndexOf('\\'));
+  return cut > 0 ? hostPath.slice(0, cut) : null;
+}
+
+function directoryIsReachable(dir: string): boolean {
+  try {
+    return fs.lstatSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Classify one host `lstat`, which is not the same thing as answering it.
+ *
+ * A clean stat answers outright. A throw only answers when the directory that
+ * would hold the file can still be seen: through the `\\wsl.localhost` bridge an
+ * idle or renamed distro makes the whole path unstatable — `ENOENT` included — so
+ * trusting the code alone records "nothing could look" as "it is not there",
+ * which is the failure this module exists to prevent.
+ */
+function hostProbeOutcome(hostPath: string): ProbeOutcome {
+  try {
+    return { status: 'answered', lives: fs.lstatSync(hostPath).isFile() };
+  } catch (error) {
+    if (!isAbsenceError(error)) return { status: 'unreachable' };
+    const dir = containingDirectoryOf(hostPath);
+    return dir && directoryIsReachable(dir)
+      ? { status: 'answered', lives: false }
+      : { status: 'unreachable' };
+  }
+}
+
+function readHostTranscriptTail(hostPath: string): Buffer | null {
+  try {
+    const st = fs.lstatSync(hostPath);
+    if (!st.isFile()) return null;
+    const safeReadFlags =
+      fs.constants.O_RDONLY
+      | (fs.constants.O_NONBLOCK ?? 0)
+      | (fs.constants.O_NOFOLLOW ?? 0);
+    const fd = fs.openSync(hostPath, safeReadFlags);
+    try {
+      const opened = fs.fstatSync(fd);
+      if (!opened.isFile()) return null;
+      const start = Math.max(0, opened.size - TAIL_BYTES);
+      const buf = Buffer.alloc(opened.size - start);
+      const read = fs.readSync(fd, buf, 0, buf.length, start);
+      return buf.subarray(0, read);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function missingGuestPython(error: unknown, stderr?: Buffer | string): boolean {
+  const detail = [
+    error instanceof Error ? error.message : String(error),
+    stderr?.toString() ?? '',
+    (error as { stderr?: Buffer | string } | null)?.stderr?.toString() ?? '',
+  ].join('\n');
+  return /(?:execvpe\(python3\) failed|python3.*(?:not found|no such file))/i.test(detail);
+}
+
+/**
+ * WSL guarantees the host UNC bridge, but not guest Python. Keep the
+ * timeout-bounded guest helper as the primary path; if that one dependency is
+ * absent, use the same no-follow/non-blocking host reader via \\wsl.localhost
+ * rather than discarding the exact resume binding.
+ *
+ * The ways this can fail are not the same answer. An `lstat` through the bridge
+ * that says "not a regular file" IS evidence of absence; failing to map the guest
+ * path to a host one at all is not, and neither is an `lstat` that could not
+ * reach the guest — `hostProbeOutcome` keeps those apart. None of them may be
+ * recorded as though the transcript were gone.
+ */
+function hostWslProbeOutcome(
+  transcriptPath: string,
+  context: TranscriptReadContext,
+): ProbeOutcome {
+  const hostPath = resolveHostTranscriptPath(transcriptPath, context);
+  if (!hostPath) return { status: 'unreachable' };
+  return hostProbeOutcome(hostPath);
+}
+
+/**
+ * The guest helper performs both checks at the point of use:
+ * - lstat must report a regular file (symlinks/FIFOs/devices are rejected);
+ * - open uses O_NOFOLLOW + O_NONBLOCK, then fstat re-checks the descriptor.
+ *
+ * It writes at most TAIL_BYTES and receives the path as argv, never interpolated
+ * into source or a shell command.
+ */
+const WSL_TRANSCRIPT_SCRIPT = [
+  'import os, stat, sys',
+  'mode, p = sys.argv[1], sys.argv[2]',
+  'try:',
+  ' s = os.lstat(p)',
+  ' if not stat.S_ISREG(s.st_mode): raise OSError()',
+  ' flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)',
+  ' fd = os.open(p, flags)',
+  ' try:',
+  '  opened = os.fstat(fd)',
+  '  if not stat.S_ISREG(opened.st_mode): raise OSError()',
+  '  if mode == "probe": os.write(1, b"1")',
+  `  else: os.lseek(fd, max(0, opened.st_size - ${TAIL_BYTES}), os.SEEK_SET); os.write(1, os.read(fd, ${TAIL_BYTES}))`,
+  ' finally: os.close(fd)',
+  'except (OSError, ValueError):',
+  ' pass',
+].join('\n');
+
+/** Frozen because it is handed to injected runners: a runner that mutated it
+ *  would silently change the bounds of every later probe and tail read. */
+const TRANSCRIPT_COMMAND_OPTIONS: Readonly<TranscriptCommandOptions> = Object.freeze({
+  timeout: WSL_READ_TIMEOUT_MS,
+  maxBuffer: TAIL_BYTES,
+  windowsHide: true,
+});
+
+/**
+ * The one place a guest transcript command is constructed.
+ *
+ * The probe and the tail differ only by the mode argument handed to the helper
+ * script, and both must carry the same distro binding and the same bounds — so
+ * spelling the command twice let the two paths drift, which is how the async
+ * refresh ended up bypassing the injected runner entirely.
+ */
+function buildTranscriptCommand(
+  transcriptPath: string,
+  mode: 'probe' | 'tail',
+  context: TranscriptReadContext,
+) {
+  return prepareLocationCommand(
+    context.location,
+    'python3',
+    ['-c', WSL_TRANSCRIPT_SCRIPT, mode, transcriptPath],
+    context.activeSession,
+  );
+}
+
+/**
+ * Refusals are not all the same answer.
+ *
+ * A distro mismatch is real evidence: this location cannot own that file, and no
+ * retry will change it. The rest fire *before* any distro is known — a durable
+ * location that has not resolved its distribution yet, or a caller with no
+ * active session context — which is the ordinary state of a WSL pane recovered
+ * after a reboot, exactly the case that must not be read as absence.
+ */
+function outcomeForRefusal(error: LocationError): ProbeOutcome {
+  if (error === 'WSL_DISTRO_MISMATCH') return { status: 'answered', lives: false };
+  return { status: 'unreachable' };
+}
+
+/**
+ * The one rule for a probe that threw: only a missing guest Python earns the
+ * host fallback, and everything else is unproven rather than absent.
+ *
+ * `stderr` needs no parameter — both runners leave it on the error, which
+ * `missingGuestPython` already reads.
+ */
+function outcomeForProbeFailure(
+  error: unknown,
+  transcriptPath: string,
+  context: TranscriptReadContext,
+): ProbeOutcome {
+  if (missingGuestPython(error)) return hostWslProbeOutcome(transcriptPath, context);
+  return { status: 'unreachable' };
+}
+
+/** The guest helper writes '1' only after both of its checks pass, so anything
+ *  else is a probe that ran and found no usable regular file. */
+function outcomeForProbeOutput(stdout: Buffer): ProbeOutcome {
+  return { status: 'answered', lives: stdout.toString() === '1' };
+}
+
+function probeWslTranscript(
+  transcriptPath: string,
+  context: TranscriptReadContext,
+  run: TranscriptCommandRunner,
+): ProbeOutcome {
+  const prepared = buildTranscriptCommand(transcriptPath, 'probe', context);
+  if (!prepared.ok) return outcomeForRefusal(prepared.error);
+  try {
+    return outcomeForProbeOutput(run(prepared.file, prepared.args, TRANSCRIPT_COMMAND_OPTIONS));
+  } catch (error) {
+    return outcomeForProbeFailure(error, transcriptPath, context);
+  }
+}
+
+async function probeWslTranscriptAsync(
+  transcriptPath: string,
+  context: TranscriptReadContext,
+  run: AsyncTranscriptCommandRunner,
+): Promise<ProbeOutcome> {
+  const prepared = buildTranscriptCommand(transcriptPath, 'probe', context);
+  if (!prepared.ok) return outcomeForRefusal(prepared.error);
+  try {
+    return outcomeForProbeOutput(
+      await run(prepared.file, prepared.args, TRANSCRIPT_COMMAND_OPTIONS),
+    );
+  } catch (error) {
+    return outcomeForProbeFailure(error, transcriptPath, context);
+  }
+}
+
+function readWslTranscriptTail(
+  transcriptPath: string,
+  context: TranscriptReadContext,
+  run: TranscriptCommandRunner,
+): Buffer | null {
+  const prepared = buildTranscriptCommand(transcriptPath, 'tail', context);
+  if (!prepared.ok) return null;
+  try {
+    return run(prepared.file, prepared.args, TRANSCRIPT_COMMAND_OPTIONS);
+  } catch (error) {
+    if (!missingGuestPython(error)) return null;
+    const hostPath = resolveHostTranscriptPath(transcriptPath, context);
+    return hostPath ? readHostTranscriptTail(hostPath) : null;
+  }
+}
+
+/**
+ * The WSL probe cache — TTL, bound, single-flight and the error-retention rule
+ * all live in `transcriptProbeCache`. Created with its own defaults so the
+ * production TTL and cap cannot drift from the ones its tests pin.
+ */
+const wslProbeCache = createTranscriptProbeCache();
+
+function probeCacheKey(transcriptPath: string, context: TranscriptReadContext): string {
+  // The active session's distro participates in the answer (a mismatch against
+  // the location's own distro refuses to execute), so it participates in the key.
+  return [
+    locationIdentity(context.location),
+    context.activeSession?.distro ?? '',
+    transcriptPath,
+  ].join('\0');
+}
+
+/** Test seam — the probe cache outlives a single call by design. */
+export function __resetTranscriptProbeCache(): void {
+  wslProbeCache.reset();
+}
+
+/** Settle in-flight probe refreshes — for tests that assert post-refresh state. */
+export function __whenTranscriptProbesIdle(): Promise<void> {
+  return wslProbeCache.whenIdle();
+}
+
+/** Safe, best-effort transcript liveness/type probe for recovery and UI use. */
+export function transcriptFileLives(
+  transcriptPath: string,
+  context?: TranscriptReadContext,
+  run?: TranscriptCommandRunner | TranscriptProber,
+): boolean {
+  if (context?.location.domain === 'wsl') {
+    const prober = toProber(run);
+    return wslProbeCache.lives(
+      probeCacheKey(transcriptPath, context),
+      () => probeWslTranscript(transcriptPath, context, prober.sync),
+      () => probeWslTranscriptAsync(transcriptPath, context, prober.async),
+    );
+  }
+  const hostPath = resolveHostTranscriptPath(transcriptPath, context);
+  if (!hostPath) return false;
+  // No assume-alive rule off the WSL branch: a local `lstat` that could not look
+  // stays "not live" here, exactly as it did before the outcome type existed.
+  const outcome = hostProbeOutcome(hostPath);
+  return outcome.status === 'answered' && outcome.lives;
+}
+
+/**
+ * "Known to exist", rather than "not known to be gone".
+ *
+ * `transcriptFileLives` assumes alive when a probe could not look, which is the
+ * right default for a status marker and for keeping a captured binding on disk:
+ * both are revisited on the next poll. A launch decision is not. It is taken once
+ * and never re-evaluated, so acting on an unproven transcript spends the pane's
+ * one `--resume <id>` on an id that may have been purged — which prints "No
+ * conversation found." and exits 0, with no exit code left to fall back on.
+ *
+ * Interim, and deliberately narrow: it asks the stricter question at the one call
+ * site whose cost is unrecoverable, without pretending the seam is fixed. #41
+ * replaces both of these with the three-valued outcome the cache already holds,
+ * so every consumer states its own rule for "could not be determined".
+ */
+export function transcriptFileProvenLive(
+  transcriptPath: string,
+  context?: TranscriptReadContext,
+  run?: TranscriptCommandRunner | TranscriptProber,
+): boolean {
+  const lives = transcriptFileLives(transcriptPath, context, run);
+  if (context?.location.domain !== 'wsl') return lives;
+  // The call above has already probed or scheduled the refresh for this key, so
+  // the recorded answer is as current as the cache can make it. Only the WSL
+  // branch can hold "attempted, never answered", which is the state `lives`
+  // flattens to true and this must report as unproven.
+  return wslProbeCache.answerFor(probeCacheKey(transcriptPath, context))?.lives === true;
 }
 
 /**
@@ -108,29 +536,24 @@ function textOf(content: unknown): string {
  * rotated, truncated mid-write, or written by an agent whose format we don't
  * know.
  */
-export function readLastAssistantMessage(transcriptPath: string): LastAssistantMessage | null {
+export function readLastAssistantMessage(
+  transcriptPath: string,
+  context?: TranscriptReadContext,
+  run?: TranscriptCommandRunner | TranscriptProber,
+): LastAssistantMessage | null {
   let raw: string;
-  try {
-    // lstat, and only a regular file: `transcript_path` arrives from a hook
-    // payload, and openSync on a FIFO blocks the MAIN process indefinitely —
-    // there is no timeout to save us, the hook's budget cannot cancel a blocked
-    // syscall, and the whole app stalls with it.
-    const st = fs.lstatSync(transcriptPath);
-    if (!st.isFile()) return null;
-    const start = Math.max(0, st.size - TAIL_BYTES);
-    const fd = fs.openSync(transcriptPath, 'r');
-    try {
-      const buf = Buffer.alloc(st.size - start);
-      // Decode ONLY what was actually read. A transcript being truncated or
-      // rotated concurrently would otherwise leave zero-fill in the tail and
-      // corrupt the very last record — the one we came here for.
-      const read = fs.readSync(fd, buf, 0, buf.length, start);
-      raw = buf.subarray(0, read).toString('utf8');
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return null;
+  if (context?.location.domain === 'wsl') {
+    // The tail has no assume-alive rule: a read that could not run has no
+    // message to report, so an unreachable guest still resolves to null here.
+    const result = readWslTranscriptTail(transcriptPath, context, toProber(run).sync);
+    if (!result) return null;
+    raw = result.toString('utf8');
+  } else {
+    const hostPath = resolveHostTranscriptPath(transcriptPath, context);
+    if (!hostPath) return null;
+    const result = readHostTranscriptTail(hostPath);
+    if (!result) return null;
+    raw = result.toString('utf8');
   }
 
   const lines = raw.split('\n');

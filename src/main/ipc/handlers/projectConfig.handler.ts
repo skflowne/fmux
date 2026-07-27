@@ -8,6 +8,7 @@ import { ipcMain } from 'electron';
 import { IPC } from '../../../shared/constants';
 import { wrapHandler } from '../wrapHandler';
 import { getProjectConfigStore, type ProjectConfigState } from '../../project/ProjectConfigStore';
+import { parseSessionLocation, type SessionLocation } from '../../../shared/sessionLocation';
 
 const MAX_PATH_LEN = 4096;
 
@@ -15,12 +16,13 @@ export function registerProjectConfigHandlers(): () => void {
   ipcMain.removeHandler(IPC.PROJECT_CONFIG_GET);
   ipcMain.handle(IPC.PROJECT_CONFIG_GET, wrapHandler(IPC.PROJECT_CONFIG_GET, async (
     _event: Electron.IpcMainInvokeEvent,
-    cwd: unknown,
+    raw: unknown,
   ): Promise<ProjectConfigState> => {
-    if (typeof cwd !== 'string' || cwd.length === 0 || cwd.length > MAX_PATH_LEN) {
+    const location = readLocation(raw);
+    if (!location) {
       return { found: false };
     }
-    return getProjectConfigStore().getState(cwd);
+    return getProjectConfigStore().getState(location);
   }));
 
   ipcMain.removeHandler(IPC.PROJECT_CONFIG_SET_TRUST);
@@ -53,4 +55,23 @@ export function registerProjectConfigHandlers(): () => void {
     ipcMain.removeHandler(IPC.PROJECT_CONFIG_GET);
     ipcMain.removeHandler(IPC.PROJECT_CONFIG_SET_TRUST);
   };
+}
+
+/**
+ * Renderer payload → SessionLocation. The wire contract belongs to
+ * `parseSessionLocation` (issue #21 — it used to be re-declared here, and this
+ * copy rejected `msys`, so a Git Bash pane never got its project config).
+ *
+ * The only thing left here is the renderer-payload length cap, which is a
+ * resource guard on an untrusted string rather than part of the location
+ * contract.
+ */
+function readLocation(raw: unknown): SessionLocation | null {
+  const location = parseSessionLocation(
+    raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? (raw as { location?: unknown }).location
+      : raw,
+  );
+  if (!location) return null;
+  return location.cwd.length <= MAX_PATH_LEN ? location : null;
 }

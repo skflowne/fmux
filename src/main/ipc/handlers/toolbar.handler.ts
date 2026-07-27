@@ -1,29 +1,51 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
-import { execFile } from 'node:child_process';
 import { IPC } from '../../../shared/constants';
+import {
+  parseSessionLocation,
+  type SessionLocation,
+} from '../../../shared/sessionLocation';
 import { wrapHandler } from '../wrapHandler';
-import { resolveAccessiblePath } from './fs.handler';
+import { git } from '../../git/git';
+import { locationCommandTarget, type PaneCommandTarget } from '../../git/paneCommand';
+import { refusesSensitivePath } from './fs.handler';
 
-/** Run `git status --porcelain` in `cwd`. Returns raw stdout, '' on any error
- *  (not a repo, git missing, blocked path). Renderer parses with
- *  shared/gitStatus.parsePorcelain. */
-function gitStatusPorcelain(cwd: string): Promise<string> {
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      ['-C', cwd, 'status', '--porcelain'],
-      { timeout: 5000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, // generous for porcelain; real repos are well under this
-      (err, stdout) => resolve(err ? '' : stdout),
-    );
-  });
-}
+/** The live pane behind a location, when one exists — see metadata.handler's
+ *  `findPaneCommandTargetForLocation`. Injected so this handler does not import
+ *  the pane registry (and its PTY/metadata graph) to answer one channel. */
+export type LivePaneTargetResolver = (
+  location: SessionLocation,
+) => PaneCommandTarget | undefined;
 
-export function registerToolbarHandlers(): () => void {
+export function registerToolbarHandlers(
+  findLivePaneTarget: LivePaneTargetResolver,
+): () => void {
+  // The payload is a pane location (issue #21 AC 1): the toolbar's file explorer
+  // invokes this with the pane's own cwd, which on Windows may be a Git Bash
+  // `/c/...` or WSL `/home/...` path. `parseSessionLocation` accepts either a
+  // structured location or a bare cwd string (a host location).
+  //
+  // From there the command goes through the shared execution API like every
+  // other git call site (issue #30) — `git()` prepares it for the location's own
+  // domain, so a WSL repo's status is produced by git IN THE GUEST rather than by
+  // Windows git walking the 9p share. That needs the live pane behind the
+  // location, because the active-session context the API demands for a guest is
+  // the pane's; a location no pane is running in is refused there.
+  //
+  // The one thing lost with the old `resolveAccessiblePath` conversion is its
+  // sensitive-path refusal, so this channel asks fs.handler's gate for the same
+  // verdict rather than restating it: `fs.readDir` declines to list `~/.ssh`,
+  // and this channel must not report its contents through git instead.
   ipcMain.removeHandler(IPC.GIT_STATUS);
-  ipcMain.handle(IPC.GIT_STATUS, wrapHandler(IPC.GIT_STATUS, async (_event: Electron.IpcMainInvokeEvent, cwd: string): Promise<string> => {
-    const resolved = await resolveAccessiblePath(cwd);
-    if (!resolved) return '';
-    return gitStatusPorcelain(resolved);
+  ipcMain.handle(IPC.GIT_STATUS, wrapHandler(IPC.GIT_STATUS, async (_event: Electron.IpcMainInvokeEvent, raw: unknown): Promise<string> => {
+    const location = parseSessionLocation(raw);
+    if (!location) return '';
+    if (await refusesSensitivePath(location)) return '';
+    const target = findLivePaneTarget(location) ?? locationCommandTarget(location);
+    const result = await git(['status', '--porcelain'], target);
+    // Fail-soft, as the renderer expects: any refusal or git error is "no
+    // badges", never a partial listing. Renderer parses with
+    // shared/gitStatus.parsePorcelain.
+    return result.code === 0 ? result.stdout : '';
   }));
 
   ipcMain.removeHandler(IPC.DIALOG_PICK_FILE);

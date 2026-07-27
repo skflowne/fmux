@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 import {
   PR_COMMENT_BODY_CAP,
   cliPath,
+  repoCacheKey,
   type PrProvider,
   type PrGate,
   type PrListResult,
@@ -21,6 +22,11 @@ import {
   type PrSummary,
   type PrComment,
 } from './PrProvider';
+import {
+  hostCommandTarget,
+  preparePaneCommand,
+  type PaneCommandTarget,
+} from '../git/paneCommand';
 
 const execFileAsync = promisify(execFile);
 
@@ -35,14 +41,6 @@ const MAX_ENTRIES = 128;
 // before capBody (Codex P2). Individual bodies are re-capped below.
 const GH_MAX_BUFFER = 16 * 1024 * 1024;
 
-// Cache key — filesystem case policy (Codex P3). On POSIX (case-sensitive)
-// /src/Foo and /src/foo are different repos — lowercasing would mix caches.
-function cacheKey(repoPath: string): string {
-  return process.platform === 'win32' || process.platform === 'darwin'
-    ? repoPath.toLowerCase()
-    : repoPath;
-}
-
 const GH_ENV: NodeJS.ProcessEnv = {
   ...process.env,
   PATH: cliPath(),
@@ -54,7 +52,7 @@ const GH_ENV: NodeJS.ProcessEnv = {
 type Exec = (
   cmd: string,
   args: string[],
-  opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; maxBuffer: number },
+  opts: { cwd?: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; maxBuffer: number },
 ) => Promise<{ stdout: string }>;
 
 // ── gh JSON payload mapping (pure, exported for tests) ────────────────────────────
@@ -220,9 +218,15 @@ export class GhPrService implements PrProvider {
     private exec: Exec = execFileAsync,
   ) {}
 
-  private gh(args: string[], cwd: string): Promise<{ stdout: string }> {
-    return this.exec(process.platform === 'win32' ? 'gh.exe' : 'gh', args, {
-      cwd,
+  private gh(args: string[], repoPath: string, target?: PaneCommandTarget): Promise<{ stdout: string }> {
+    const command = preparePaneCommand(
+      target ?? hostCommandTarget(repoPath),
+      process.platform === 'win32' ? 'gh.exe' : 'gh',
+      args,
+    );
+    if (!command.ok) return Promise.reject(new Error(command.error));
+    return this.exec(command.file, command.args, {
+      ...(command.cwd ? { cwd: command.cwd } : {}),
       timeout: GH_TIMEOUT_MS,
       env: GH_ENV,
       windowsHide: true,
@@ -231,19 +235,19 @@ export class GhPrService implements PrProvider {
   }
 
   // host arg unused — gh gate is github.com auth (see PrProvider contract).
-  async gate(repoPath: string, _host?: string): Promise<PrGate> {
+  async gate(repoPath: string, _host?: string, target?: PaneCommandTarget): Promise<PrGate> {
     if (this.ghAvailable === false) {
       return { ok: false, reason: 'cli-missing', message: 'GitHub CLI (gh) is not installed' };
     }
     try {
-      await this.gh(['--version'], repoPath);
+      await this.gh(['--version'], repoPath, target);
       this.ghAvailable = true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') this.ghAvailable = false;
       return { ok: false, reason: 'cli-missing', message: 'GitHub CLI (gh) is not installed' };
     }
     try {
-      await this.gh(['auth', 'status'], repoPath);
+      await this.gh(['auth', 'status'], repoPath, target);
     } catch {
       return {
         ok: false,
@@ -256,15 +260,21 @@ export class GhPrService implements PrProvider {
 
   // force=true: manual refresh — skip TTL cache and call gh immediately (Codex P2).
   //   Fixes refresh button missing just-landed PRs/checks.
-  async listPrs(repoPath: string, force = false): Promise<PrListResult> {
-    const key = cacheKey(repoPath);
+  async listPrs(repoPath: string, force = false, target?: PaneCommandTarget): Promise<PrListResult> {
+    const prepared = target
+      ? preparePaneCommand(target, process.platform === 'win32' ? 'gh.exe' : 'gh', ['pr', 'list'])
+      : null;
+    if (prepared && !prepared.ok) {
+      return { ok: false, error: prepared.error };
+    }
+    const key = repoCacheKey(repoPath, target);
     const entry = this.listCache.get(key);
     const now = this.now();
     if (entry) {
       if (entry.pending) return entry.pending; // in-flight fetch always shared (dedup).
       if (!force && now - entry.fetchedAt < LIST_TTL_MS) return entry.value;
     }
-    const pending = this.fetchList(repoPath)
+    const pending = this.fetchList(repoPath, target)
       .then((value) => {
         this.listCache.set(key, { value, fetchedAt: this.now(), pending: null });
         return value;
@@ -283,7 +293,7 @@ export class GhPrService implements PrProvider {
     return pending;
   }
 
-  private async fetchList(repoPath: string): Promise<PrListResult> {
+  private async fetchList(repoPath: string, target?: PaneCommandTarget): Promise<PrListResult> {
     try {
       const { stdout } = await this.gh(
         [
@@ -295,6 +305,7 @@ export class GhPrService implements PrProvider {
           'number,title,state,isDraft,author,headRefName,updatedAt,url,reviewDecision,mergeable,statusCheckRollup',
         ],
         repoPath,
+        target,
       );
       const arr = JSON.parse(stdout) as GhListItem[];
       const prs = (Array.isArray(arr) ? arr : [])
@@ -307,8 +318,19 @@ export class GhPrService implements PrProvider {
     }
   }
 
-  async prDetail(repoPath: string, number: number, updatedAt: string): Promise<PrDetailResult> {
-    const key = `${cacheKey(repoPath)}\0${number}`;
+  async prDetail(
+    repoPath: string,
+    number: number,
+    updatedAt: string,
+    target?: PaneCommandTarget,
+  ): Promise<PrDetailResult> {
+    const prepared = target
+      ? preparePaneCommand(target, process.platform === 'win32' ? 'gh.exe' : 'gh', ['pr', 'view'])
+      : null;
+    if (prepared && !prepared.ok) {
+      return { ok: false, error: prepared.error };
+    }
+    const key = `${repoCacheKey(repoPath, target)}\0${number}`;
     const cached = this.detailCache.get(key);
     // unchanged updatedAt → skip comment re-fetch (key to rate-limit ceiling).
     if (cached && cached.updatedAt === updatedAt && cached.value.ok) return cached.value;
@@ -316,6 +338,7 @@ export class GhPrService implements PrProvider {
       const { stdout } = await this.gh(
         ['pr', 'view', String(number), '--json', 'number,url,comments,reviews'],
         repoPath,
+        target,
       );
       const json = JSON.parse(stdout) as GhDetailJson & { url?: string };
       // Inline review comments missing from gh pr view → separate gh api fetch (Codex P2).
@@ -325,6 +348,7 @@ export class GhPrService implements PrProvider {
         const rc = await this.gh(
           ['api', '--paginate', `repos/{owner}/{repo}/pulls/${number}/comments?per_page=100`],
           repoPath,
+          target,
         );
         const parsed = JSON.parse(rc.stdout) as GhReviewComment[];
         if (Array.isArray(parsed)) reviewComments = parsed;

@@ -23,6 +23,11 @@ import { createHash } from 'crypto';
 import { atomicWriteJSON, atomicReadJSON } from '../../daemon/util/atomicWrite';
 import { getWmuxHomeDir } from '../../shared/constants';
 import {
+  parseSessionLocation,
+  toHostAccessiblePath,
+  type SessionLocation,
+} from '../../shared/sessionLocation';
+import {
   normalizeWmuxProjectConfig,
   PROJECT_CONFIG_MAX_FILE_BYTES,
   WMUX_PROJECT_CONFIG_FILENAME,
@@ -124,11 +129,14 @@ interface ConfigCacheEntry {
 export interface ProjectConfigStoreOptions {
   /** Override the trust-DB entry cap (default MAX_PROJECT_TRUST_ENTRIES). */
   entryCap?: number;
+  /** Test seam for mapping a pane location into a path Node can read. */
+  toHostPath?: typeof toHostAccessiblePath;
 }
 
 export class ProjectConfigStore {
   private readonly trustPath: string;
   private readonly entryCap: number;
+  private readonly toHostPath: typeof toHostAccessiblePath;
   private trustCache: ProjectTrustDb | null = null;
   private writeChain: Promise<void> = Promise.resolve();
   /** Parse cache keyed by configPath; invalidated by mtime+size change. */
@@ -140,6 +148,7 @@ export class ProjectConfigStore {
       typeof options.entryCap === 'number' && options.entryCap > 0
         ? Math.floor(options.entryCap)
         : MAX_PROJECT_TRUST_ENTRIES;
+    this.toHostPath = options.toHostPath ?? toHostAccessiblePath;
   }
 
   // ── Discovery ──────────────────────────────────────────────────────────────
@@ -212,9 +221,15 @@ export class ProjectConfigStore {
 
   // ── State for the renderer ─────────────────────────────────────────────────
 
-  async getState(cwd: string): Promise<ProjectConfigState> {
-    if (typeof cwd !== 'string' || cwd.trim().length === 0) return { found: false };
-    const dir = this.findConfigDir(cwd.trim());
+  async getState(input: string | SessionLocation): Promise<ProjectConfigState> {
+    // `parseSessionLocation` owns the wire contract (issue #21) — every domain
+    // including `msys`, and a bare cwd string as a host location. Whether the
+    // resulting path is reachable from Windows is `toHostPath`'s call.
+    const location = parseSessionLocation(input);
+    if (!location) return { found: false };
+    const converted = this.toHostPath(location, location.cwd);
+    if (!converted.ok) return { found: false };
+    const dir = this.findConfigDir(converted.path);
     if (dir === null) return { found: false };
     const read = this.readConfig(dir);
     if (read === null) return { found: false };

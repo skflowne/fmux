@@ -1,16 +1,25 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { SessionLocation } from '../../../shared/sessionLocation';
 
 interface EditorPanelProps {
   filePath: string;
   isActive: boolean;
   surfaceId: string;
+  /**
+   * Which machine this file lives on — NOT where the pane is working now
+   * (issue #46). `fs.readFile` translates the absolute `filePath` for this
+   * domain; the file does not move when the pane's terminal changes directory,
+   * so this is frozen at open time on purpose. The pane's live working
+   * location is `sessionLocationForPane`, and is a different fact.
+   */
+  fileOrigin?: SessionLocation;
 }
 
-async function readFileContent(filePath: string): Promise<string | null> {
+async function readFileContent(filePath: string, fileOrigin?: SessionLocation): Promise<string | null> {
   try {
     const api = (window as any).electronAPI?.fs;
-    if (!api?.readFile) return null;
-    return await api.readFile(filePath);
+    if (!api?.readFile || !fileOrigin) return null;
+    return await api.readFile(filePath, fileOrigin);
   } catch {
     return null;
   }
@@ -24,7 +33,7 @@ function shortenPath(p: string): string {
   return '...' + sep + parts.slice(-2).join(sep);
 }
 
-export default function EditorPanel({ filePath, isActive, surfaceId }: EditorPanelProps) {
+export default function EditorPanel({ filePath, isActive, surfaceId, fileOrigin }: EditorPanelProps) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +47,7 @@ export default function EditorPanel({ filePath, isActive, surfaceId }: EditorPan
   useEffect(() => {
     setLoading(true);
     setError(null);
-    readFileContent(filePath).then((result) => {
+    readFileContent(filePath, fileOrigin).then((result) => {
       if (result === null) {
         setError('Unable to read file');
         setContent(null);
@@ -48,7 +57,7 @@ export default function EditorPanel({ filePath, isActive, surfaceId }: EditorPan
       }
       setLoading(false);
     });
-  }, [filePath]);
+  }, [filePath, fileOrigin]);
 
   const handleToggleEdit = useCallback(() => {
     if (editing) {
@@ -66,7 +75,7 @@ export default function EditorPanel({ filePath, isActive, surfaceId }: EditorPan
   const handleReload = useCallback(() => {
     setLoading(true);
     setError(null);
-    readFileContent(filePath).then((result) => {
+    readFileContent(filePath, fileOrigin).then((result) => {
       if (result === null) {
         setError('Unable to read file');
         setContent(null);
@@ -76,7 +85,7 @@ export default function EditorPanel({ filePath, isActive, surfaceId }: EditorPan
       }
       setLoading(false);
     });
-  }, [filePath]);
+  }, [filePath, fileOrigin]);
 
   return (
     <div

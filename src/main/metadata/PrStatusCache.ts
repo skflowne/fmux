@@ -1,7 +1,13 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { PrStatus } from '../../shared/types';
-import { normalizeWorktreePath } from '../../shared/workTask';
+import {
+  paneCommandIdentity,
+  preparePaneCommand,
+  hostCommandTarget,
+  type PaneCommandTarget,
+} from '../git/paneCommand';
+import { BoundedRevalidatingStore } from '../cache/boundedRevalidatingStore';
 
 const execFileAsync = promisify(execFile);
 
@@ -12,26 +18,33 @@ const execFileAsync = promisify(execFile);
  * cache with a 5 min TTL, and is silently absent when `gh` is not installed
  * or the branch has no PR. Never throws; never prompts (GH_PROMPT_DISABLED).
  *
- * Cache key is `cwd + branch` — the same branch checked out in two repos
- * (or two worktrees) resolves independently, while repeated lookups from
- * the metadata poll collapse onto one gh subprocess per TTL window.
+ * Cache key is `location identity + branch` — the same branch checked out in
+ * two repos, worktrees, domains, or WSL distributions resolves independently,
+ * while repeated lookups from the metadata poll collapse onto one gh
+ * subprocess per TTL window.
  */
 
 /**
- * Cache key = normalized cwd + NUL + branch. Normalizing the cwd (J3 F5) folds
- * Windows path-casing / separator / trailing-slash variance so a PR-creation
- * `invalidate(worktreePath, branch)` reliably hits the same entry the metadata
- * poll's `get(cwd, branch)` created — otherwise `C:\a` vs `c:/a/` miss and the
- * stale 5-min entry survives (CX8). The raw cwd is still what `fetch` runs gh in.
+ * Cache key = location identity + NUL + branch.
+ *
+ * The identity is computed by `paneCommandIdentity` → `locationIdentity`
+ * (shared/sessionLocation.ts). That shared identity helper separates
+ * host/msys/wsl (and WSL distros) and, for host
+ * paths, folds separator, duplicate-slash, trailing-slash and — on the
+ * case-insensitive filesystems — case variance. That folding is what makes a
+ * PR-creation `invalidate(worktreePath, branch)` hit the entry the metadata
+ * poll's `get(target, branch)` created; without it `C:\a` vs `c:/a/` miss and
+ * the stale 5-min entry survives (CX8). Nothing is normalized here — a second
+ * normalizer is exactly how the two spellings drifted apart before.
+ *
+ * The raw location is still what `fetch` runs gh in.
  */
-function cacheKey(cwd: string, branch: string): string {
-  return `${normalizeWorktreePath(cwd)}\0${branch}`;
+function cacheKey(target: PaneCommandTarget, branch: string): string {
+  return `${paneCommandIdentity(target)}\0${branch}`;
 }
 
 const TTL_MS = 5 * 60 * 1000;
 const GH_TIMEOUT_MS = 10_000;
-/** Cache ceiling — evicts oldest entries; sized far above realistic pane counts. */
-const MAX_ENTRIES = 256;
 
 interface CacheEntry {
   value: PrStatus | null;
@@ -82,8 +95,21 @@ export function mapGhPrView(json: GhPrViewJson): PrStatus | null {
 }
 
 export class PrStatusCache {
-  private cache = new Map<string, CacheEntry>();
-  /** Tri-state gh availability: unknown until first probe. */
+  /**
+   * The bound, FIFO eviction and the identity guard on settled writes live in
+   * the store, shared with GitSyncStatusCache and transcriptProbeCache. What
+   * stays here is this cache's own policy: callers await the fetch, and a
+   * failed fetch is a real answer (null) cached for the TTL like any other.
+   */
+  private store = new BoundedRevalidatingStore<CacheEntry>();
+  /**
+   * Tri-state gh availability: unknown until first probe.
+   *
+   * Deliberately outside the store and outside the per-entry guard — it is
+   * process-wide, not per-key, and it is latched from inside `fetch`. Moving it
+   * under the guard would make an ENOENT that settles after an `invalidate`
+   * fail to latch, so a machine without gh would go on spawning it forever.
+   */
   private ghAvailable: boolean | null = null;
 
   constructor(
@@ -91,7 +117,7 @@ export class PrStatusCache {
     private exec: (
       cmd: string,
       args: string[],
-      opts: { cwd: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean },
+      opts: { cwd?: string; timeout: number; env: NodeJS.ProcessEnv; windowsHide: boolean; maxBuffer: number },
     ) => Promise<{ stdout: string }> = execFileAsync,
   ) {}
 
@@ -101,63 +127,82 @@ export class PrStatusCache {
    * absence is the contract. `branch` is only a cache-key component; gh
    * itself resolves the PR from the checkout.
    */
-  async get(cwd: string, branch: string): Promise<PrStatus | null> {
+  async get(input: PaneCommandTarget | string, branch: string): Promise<PrStatus | null> {
+    const target = typeof input === 'string' ? hostCommandTarget(input) : input;
     if (this.ghAvailable === false) return null;
-    const key = cacheKey(cwd, branch);
-    const entry = this.cache.get(key);
+    if (!preparePaneCommand(target, process.platform === 'win32' ? 'gh.exe' : 'gh', ['pr', 'view']).ok) {
+      return null;
+    }
+    const key = cacheKey(target, branch);
+    const entry = this.store.peek(key);
     const now = this.now();
     if (entry) {
       if (entry.pending) return entry.pending;
       if (now - entry.fetchedAt < TTL_MS) return entry.value;
     }
 
-    const pending = this.fetch(cwd)
-      .then((value) => {
-        this.cache.set(key, { value, fetchedAt: this.now(), pending: null });
-        return value;
-      })
-      .catch(() => {
-        this.cache.set(key, { value: null, fetchedAt: this.now(), pending: null });
-        return null;
-      });
-    this.cache.set(key, {
+    // The entry this fetch belongs to. Held by reference so the settle below
+    // can be refused if the map has moved on — the PR-creation `invalidate`,
+    // a `clear`, or an eviction, any of which can land while gh runs.
+    const next: CacheEntry = {
       value: entry?.value ?? null,
       fetchedAt: entry?.fetchedAt ?? 0,
-      pending,
-    });
-    this.evictIfNeeded();
+      pending: null,
+    };
+    // Installed before the fetch starts, so the entry the settle matches against
+    // always exists by then — rather than relying on `fetch` being declared
+    // async and therefore unable to throw before the install below.
+    this.store.insert(key, next);
+    const pending = (async () => {
+      // `fetch` already resolves null on every failure path; the catch is a
+      // belt on top of that, not a second error rule.
+      const value = await this.fetch(target).catch(() => null);
+      // Clock read stays outside the mutate, so the mutate is assignments only
+      // and cannot throw. A throw in there would abandon `pending` half-cleared,
+      // leaving the entry holding a rejected promise that every later get()
+      // would return — and this cache's contract is that it never throws.
+      const fetchedAt = this.now();
+      this.store.settle(key, next, (slot) => {
+        slot.value = value;
+        slot.fetchedAt = fetchedAt;
+        slot.pending = null;
+      });
+      return value;
+    })();
+    next.pending = pending;
     return pending;
   }
 
   /** Drop a single cache entry (used when the branch changes so the next poll refetches). */
-  invalidate(cwd: string, branch: string): void {
-    this.cache.delete(cacheKey(cwd, branch));
+  invalidate(input: PaneCommandTarget | string, branch: string): void {
+    const target = typeof input === 'string' ? hostCommandTarget(input) : input;
+    this.store.drop(cacheKey(target, branch));
   }
 
   clear(): void {
-    this.cache.clear();
+    this.store.clear();
   }
 
-  private evictIfNeeded(): void {
-    while (this.cache.size > MAX_ENTRIES) {
-      const oldest = this.cache.keys().next().value;
-      if (oldest === undefined) break;
-      this.cache.delete(oldest);
-    }
-  }
-
-  private async fetch(cwd: string): Promise<PrStatus | null> {
+  private async fetch(target: PaneCommandTarget): Promise<PrStatus | null> {
     try {
-      const { stdout } = await this.exec(
-        process.platform === 'win32' ? 'gh.exe' : 'gh',
+      const executable = process.platform === 'win32' ? 'gh.exe' : 'gh';
+      const command = preparePaneCommand(
+        target,
+        executable,
         ['pr', 'view', '--json', 'number,state,isDraft,url,statusCheckRollup'],
+      );
+      if (!command.ok) return null;
+      const { stdout } = await this.exec(
+        command.file,
+        command.args,
         {
-          cwd,
+          ...(command.cwd ? { cwd: command.cwd } : {}),
           timeout: GH_TIMEOUT_MS,
           // Force non-interactive: gh must never block the metadata poll on
           // a login prompt or pager.
           env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_PAGER: 'cat', NO_COLOR: '1' },
           windowsHide: true,
+          maxBuffer: 4 * 1024 * 1024,
         },
       );
       this.ghAvailable = true;

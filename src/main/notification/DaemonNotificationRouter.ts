@@ -22,6 +22,7 @@ import { getWorkspaceMirror, type WorkspaceMirror } from '../workspace/Workspace
 import { sendToRenderer } from '../pipe/handlers/_bridge';
 import { agentDisplayToSlug } from '../pty/AgentDetector';
 import type { ChannelMessage } from '../../shared/channels';
+import { parseSessionLocation, type SessionLocation } from '../../shared/sessionLocation';
 
 // Mirrors PTYBridge.AGENT_EVENT_SUPPRESSION_MS — same dedup semantics across
 // daemon and local modes.
@@ -59,6 +60,8 @@ interface AgentEventPayload {
    * probe — so a bridge that reaches the daemon directly loses none of them.
    */
   signal?: AgentSignal;
+  /** Authoritative location of `sessionId`, attached by the daemon. */
+  location?: SessionLocation;
 }
 
 /**
@@ -778,7 +781,17 @@ export class DaemonNotificationRouter {
           // ONCE here and reused for the lifecycle tee below, mirroring the
           // local handler's single read. See buildTurnBoundaryMetadata.
           const hookSignal = arbitrated ? ev.signal ?? null : null;
-          const stopMessage = hookSignal ? readStopMessage(hookSignal) : null;
+          // The daemon's location stamp crosses a process boundary, so it is
+          // validated by the one wire validator (issue #21).
+          const eventLocation = parseSessionLocation(ev.location);
+          const stopMessage = hookSignal
+            ? readStopMessage(
+                hookSignal,
+                eventLocation
+                  ? { ptyId: payload.sessionId, location: eventLocation }
+                  : undefined,
+              )
+            : null;
           const boundary = hookSignal
             ? buildTurnBoundaryMetadata(hookSignal.kind, stopMessage)
             : null;

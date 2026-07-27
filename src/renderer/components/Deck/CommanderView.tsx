@@ -70,6 +70,11 @@ import { DeckLoopPanel } from './DeckLoopPanel';
 import { DeckDecisionCard } from './DeckDecisionCard';
 import { DeckBriefingCard } from './DeckBriefingCard';
 import { AgentModeChipContainer } from './AgentModeChip';
+import type { SessionLocation } from '../../../shared/sessionLocation';
+import {
+  activeSessionLocation,
+  reuseEquivalentSessionLocation,
+} from '../../utils/focusedSurface';
 
 const EMPTY_MESSAGES: ChannelMessage[] = [];
 
@@ -115,8 +120,10 @@ export interface CommanderViewContentProps {
   /** M1.5: the workspace this deck view is bound to — new schedules are
    *  created against its orchestrator. */
   activeWorkspaceId?: string;
-  /** Active pane live cwd — skill catalog scan basis for loop setup modal. */
-  activePaneCwd?: string;
+  /** Active pane location — skill catalog scan basis for the loop setup
+   *  modal. A bare cwd is deliberately not accepted: without its shell it
+   *  cannot be told apart from a host path (issue #21 AC 6). */
+  activePaneLocation?: SessionLocation;
   /** P2① mission control — the Fleet roster slot, pinned above the thread.
    *  Injected as a node so this surface stays presentational/store-free. */
   fleetSlot?: React.ReactNode;
@@ -150,7 +157,7 @@ export function CommanderViewContent({
   quickActions = [],
   onQuickAction,
   activeWorkspaceId,
-  activePaneCwd,
+  activePaneLocation,
   fleetSlot,
   channelsUnread = 0,
   onJumpToChannels,
@@ -352,7 +359,11 @@ export function CommanderViewContent({
           <AgentModeChipContainer t={t} workspaceId={activeWorkspaceId} />
           {/* The one-click loop chip + panel (loop engineering v1) — binds to
               THIS workspace. */}
-          <DeckLoopPanel t={t} workspaceId={activeWorkspaceId} cwd={activePaneCwd} />
+          <DeckLoopPanel
+            t={t}
+            workspaceId={activeWorkspaceId}
+            location={activePaneLocation}
+          />
           {/* Schedules chip + inline panel — new schedules bind to THIS
               workspace's orchestrator (M1.5). */}
           <DeckSchedulesPanel t={t} workspaceId={activeWorkspaceId} workspaceName={workspaceName} />
@@ -817,23 +828,24 @@ export function CommanderView(): React.ReactElement {
   // conversation. Background workspaces' turns keep streaming into their own
   // threads via useDeckStream's envelope routing.
   const activeWorkspaceId = useStore((s) => s.activeWorkspaceId) || '';
-  // Active pane live cwd (OSC 7 tracked surface.cwd) — skill catalog scan basis for loop modal.
-  // Tree walk converges to raw string inside selector to minimize re-renders.
-  const activePaneCwd = useStore((s) => {
-    const ws = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
-    if (!ws) return '';
-    const findLeaf = (pane: import('../../../shared/types').Pane): import('../../../shared/types').PaneLeaf | null => {
-      if (pane.type === 'leaf') return pane.id === ws.activePaneId ? pane : null;
-      for (const child of pane.children) {
-        const found = findLeaf(child);
-        if (found) return found;
-      }
-      return null;
-    };
-    const leaf = findLeaf(ws.rootPane);
-    const surface = leaf?.surfaces.find((sf) => sf.id === leaf.activeSurfaceId);
-    return surface?.cwd || ws.profile?.startupCwd || '';
-  });
+  // Active pane location (OSC 7 tracked surface.cwd + its shell domain) — the
+  // skill catalog scan basis for the loop modal. Derived by the renderer's one
+  // location helper; this component used to carry three private pane walkers
+  // that re-implemented it. `workspaces` is already subscribed above, so
+  // reading the active workspace object here costs no extra re-render.
+  const activePaneLocationRef = useRef<SessionLocation | undefined>(undefined);
+  const activePaneLocation = useMemo(() => {
+    const ws = workspaces.find((candidate) => candidate.id === activeWorkspaceId);
+    const next = (ws ? activeSessionLocation(ws) : null) ?? undefined;
+    // Hold the reference stable across unrelated workspace churn. The legacy
+    // classification path inside the helper builds a fresh object every call,
+    // and consumers key effects on this identity (the loop modal re-runs its
+    // skill catalog scan whenever the location changes).
+    const prev = activePaneLocationRef.current;
+    const stable = reuseEquivalentSessionLocation(prev, next, window.electronAPI.platform);
+    activePaneLocationRef.current = stable;
+    return stable;
+  }, [workspaces, activeWorkspaceId]);
   const brainThread =
     useStore((s) => (activeWorkspaceId ? s.brainThreads[activeWorkspaceId] : undefined)) ??
     EMPTY_DECK_BRAIN_THREAD;
@@ -853,6 +865,7 @@ export function CommanderView(): React.ReactElement {
   const recoveryPanes = useMemo(
     () =>
       buildRecoveryPanes({
+        platform: window.electronAPI.platform,
         resumeHintByPtyId,
         resumeBindingByPtyId,
         ptyReadyByPtyId,
@@ -1213,7 +1226,7 @@ export function CommanderView(): React.ReactElement {
       quickActions={quickActions}
       onQuickAction={handleQuickAction}
       activeWorkspaceId={activeWorkspaceId}
-      activePaneCwd={activePaneCwd}
+      activePaneLocation={activePaneLocation}
       fleetSlot={<DeckFleet onJumpToPane={onJumpToPane} />}
       channelsUnread={channelsUnread}
       onJumpToChannels={onJumpToChannels}

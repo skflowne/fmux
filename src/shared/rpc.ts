@@ -475,6 +475,7 @@ export interface DaemonEvent {
     | 'prompt.event'
     | 'notification.event'
     | 'cwd.changed'
+    | 'location.changed'
     | 'title.changed'
     // X1 workspace-context sidebar (schema-freeze §2). Per-session live
     // context detected where the PTY lives:
@@ -529,6 +530,8 @@ export interface DaemonCreateSessionParams {
   id: string;
   cwd: string;
   cmd: string;
+  /** Optional domain-aware identity; legacy callers remain valid via cmd+cwd classification. */
+  location?: import('./sessionLocation').SessionLocation;
   /**
    * The fully-resolved child environment. Main builds this (resolveSpawnEnv:
    * buildSafeChildEnv + workspace-profile overlay + forced WMUX identity) and

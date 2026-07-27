@@ -6,10 +6,12 @@ import {
   permissionFlagFor,
   mergeResumeBinding,
   normalizeResumeCwd,
+  resumeBindingMatchesLocation,
   PERMISSION_FLAG,
   type ResumeBinding,
   type PermissionMode,
 } from '../agentResume';
+import { classifySessionLocation, locationIdentity } from '../sessionLocation';
 
 const CWD = 'D:\\wmux';
 const binding = (over: Partial<ResumeBinding> = {}): ResumeBinding => ({
@@ -18,6 +20,27 @@ const binding = (over: Partial<ResumeBinding> = {}): ResumeBinding => ({
   cwd: CWD,
   ts: 1,
   ...over,
+});
+
+describe('resumeBindingMatchesLocation', () => {
+  it('does not collide across WSL distros with identical cwd text', () => {
+    const ubuntu = classifySessionLocation('wsl.exe', '/home/me/repo', 'Ubuntu');
+    const debian = classifySessionLocation('wsl.exe', '/home/me/repo', 'Debian');
+    const captured = binding({ cwd: ubuntu.cwd, locationIdentity: locationIdentity(ubuntu) });
+    expect(resumeBindingMatchesLocation(captured, debian.cwd, debian, 'linux')).toBe(false);
+    expect(resumeBindingMatchesLocation(captured, ubuntu.cwd, ubuntu, 'linux')).toBe(true);
+  });
+
+  it('matches a macOS identity using the renderer-provided platform', () => {
+    const pane = classifySessionLocation('zsh', '/Users/Alice/Repo');
+    const captured = binding({
+      cwd: pane.cwd,
+      locationIdentity: locationIdentity(pane, 'darwin'),
+    });
+
+    expect(resumeBindingMatchesLocation(captured, pane.cwd, pane, 'darwin')).toBe(true);
+    expect(resumeBindingMatchesLocation(captured, pane.cwd, pane, 'linux')).toBe(false);
+  });
 });
 
 describe('toResumeCommand (X6)', () => {
@@ -202,6 +225,13 @@ describe('toResumeCommand (X6)', () => {
       expect(
         toResumeCommand('claude', binding({ cwd: 'C:\\other', permissionMode: 'bypassPermissions' }), CWD, opt),
       ).toBe('claude --continue');
+    });
+
+    it('no usable binding → --continue with no flag, even opted in (U-PERM fail-safe)', () => {
+      // The D5 probe passes no binding when the exact transcript is not proven to
+      // exist, and the captured permission mode rides on that same binding. So the
+      // degraded launch must carry neither the exact id nor the bypass flag.
+      expect(toResumeCommand('claude', undefined, CWD, opt)).toBe('claude --continue');
     });
 
     it('default OFF: bypass binding does NOT auto-add the flag (D6 fail-safe)', () => {

@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getPipeName, ENV_KEYS, getPidMapDir } from '../../shared/constants';
 import { expandTilde } from '../../shared/expandTilde';
-import { applyWslPromptIntegration, isWslShell, splitWslCwd } from '../../shared/wslCwd';
+import { applyWslPromptIntegration, isWslShell } from '../../shared/wslCwd';
+import { classifySessionLocation, preparePtyLocation } from '../../shared/sessionLocation';
 import { resolveSpawnEnv } from './resolveSpawnEnv';
 import { withFreshWindowsPath } from '../../shared/windowsPathEnv';
 import { resolveEnvPolicy, type SpawnKind } from '../../shared/spawnKind';
@@ -13,6 +14,7 @@ import { withheldCredentialNames } from '../../shared/envFilter';
 import { getShellUtf8Locale } from './shellLocale';
 import { isWindows } from '../../shared/platform';
 import { ShellDetector } from '../../shared/ShellDetector';
+import { distroFromPaneContext } from '../../shared/wslDistro';
 
 export type ShellType = 'powershell' | 'bash' | 'cmd' | 'unknown';
 
@@ -20,6 +22,8 @@ export interface PTYInstance {
   id: string;
   process: pty.IPty;
   shell: string;
+  /** Non-secret identity fact extracted from the actual WSL spawn context. */
+  wslDistro?: string;
   /**
    * Workspace this PTY belongs to. Captured at create time so the EventBus
    * can scope process.* events without consulting the renderer state.
@@ -233,12 +237,21 @@ export class PTYManager {
     // cannot use it as the spawn cwd — ConPTY/CreateProcess only resolve
     // Windows paths. Give node-pty a safe Windows cwd (the caller's home)
     // and let `wsl.exe --cd <linuxpath>` do the actual positioning instead.
-    // No-op for every other shell/cwd combination (see wslCwd.ts).
-    const { spawnCwd, prefixArgs } = splitWslCwd(shell, cwd, os.homedir());
+    // An MSYS/Git Bash `/c/...` cwd is converted the same way; the shared
+    // module owns all three domains (see shared/sessionLocation.ts).
+    const { spawnCwd, prefixArgs } = cwd
+      ? preparePtyLocation(classifySessionLocation(shell, cwd), os.homedir())
+      : { spawnCwd: undefined as string | undefined, prefixArgs: [] as string[] };
 
+    const spawnArgs = [...prefixArgs, ...hookInjection.args];
+    const wslDistro = distroFromPaneContext({
+      shell,
+      args: spawnArgs,
+      env: hookInjection.env,
+    });
     let ptyProcess: ReturnType<typeof pty.spawn>;
     try {
-      ptyProcess = pty.spawn(shell, [...prefixArgs, ...hookInjection.args], {
+      ptyProcess = pty.spawn(shell, spawnArgs, {
         name: 'xterm-256color',
         cols: options?.cols || 80,
         rows: options?.rows || 24,
@@ -255,6 +268,7 @@ export class PTYManager {
       id,
       process: ptyProcess,
       shell,
+      ...(wslDistro ? { wslDistro } : {}),
       ...(options?.workspaceId ? { workspaceId: options.workspaceId } : {}),
     };
     this.instances.set(id, instance);

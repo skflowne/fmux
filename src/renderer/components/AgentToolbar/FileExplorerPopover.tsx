@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useStore } from '../../stores';
 import { selectActiveWorkspace } from '../../stores/selectors/workspaceProjections';
 import { useT } from '../../hooks/useT';
 import { parsePorcelain, type GitStatusCode } from '../../../shared/gitStatus';
-import { findActiveLeaf } from '../../utils/focusedSurface';
+import { activeSessionLocation } from '../../utils/focusedSurface';
 
 interface Entry { name: string; path: string; isDirectory: boolean; isSymlink: boolean; }
 
@@ -25,18 +25,18 @@ export default function FileExplorerPopover() {
   // without creating new objects so Object.is snapshot check passes (no infinite
   // loop). Does not re-render on background ws metadata/surface churn.
   const ws = useStore(selectActiveWorkspace);
+  // The ONE working directory this popover has. It used to carry two — a
+  // derived location for `fs.readDir` and a separately-walked `metadata.cwd`
+  // for `git.status` — which disagreed whenever the active pane was not in the
+  // workspace's own directory, listing one tree and badging another.
+  const location = useMemo(() => ws ? activeSessionLocation(ws) : null, [ws]);
   const activePaneId = ws?.activePaneId;
-  let cwd: string | undefined = ws?.metadata?.cwd;
-  if (ws && !cwd) {
-    const leaf = findActiveLeaf(ws);
-    cwd = leaf?.surfaces.find((surf) => surf.id === leaf.activeSurfaceId)?.cwd || undefined;
-  }
 
   const [entries, setEntries] = useState<Entry[]>([]);
   const [statusByRel, setStatusByRel] = useState<Record<string, GitStatusCode>>({});
 
   useEffect(() => {
-    if (!cwd) {
+    if (!location) {
       // Clear stale listing/badges when the cwd becomes unavailable.
       setEntries([]);
       setStatusByRel({});
@@ -46,12 +46,15 @@ export default function FileExplorerPopover() {
 
     const fsApi = window.electronAPI.fs;
     if (fsApi) {
-      void fsApi.readDir(cwd)
+      void fsApi.readDir(location.cwd, location)
         .then((list) => { if (!cancelled) setEntries(list as Entry[]); })
         .catch(() => { if (!cancelled) setEntries([]); });
     }
 
-    void window.electronAPI.git.status(cwd)
+    // The status handler accepts a location or a bare cwd; passing the
+    // location keeps the guest domain intact instead of handing a WSL path to
+    // a Windows-side `git`.
+    void window.electronAPI.git.status(location)
       .then((out) => {
         if (cancelled) return;
         const map: Record<string, GitStatusCode> = {};
@@ -63,7 +66,7 @@ export default function FileExplorerPopover() {
       .catch(() => { if (!cancelled) setStatusByRel({}); });
 
     return () => { cancelled = true; };
-  }, [cwd]);
+  }, [location]);
 
   // Match git-status entries by their exact (forward-slashed) relative path, or
   // a directory whose subtree contains a change. No basename fallback: a bare
@@ -77,7 +80,7 @@ export default function FileExplorerPopover() {
   }, [statusByRel]);
 
   const openFile = (path: string) => {
-    if (activePaneId) addEditorSurface(activePaneId, path);
+    if (activePaneId && location) addEditorSurface(activePaneId, path, location);
     setPopover(null);
   };
 
@@ -86,7 +89,7 @@ export default function FileExplorerPopover() {
       className="absolute bottom-full left-24 mb-1 w-80 max-h-80 overflow-y-auto rounded-[7px] border border-[var(--accent-blue)] bg-[var(--bg-mantle)] shadow-xl z-50 p-1 font-mono text-xs"
       data-testid="file-explorer"
     >
-      {!cwd && (
+      {!location && (
         <p className="text-[var(--text-muted)] px-2 py-2">{t('toolbar.noWorkingDir')}</p>
       )}
       {entries.map((e) => {

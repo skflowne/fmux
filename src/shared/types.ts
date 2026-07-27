@@ -20,6 +20,7 @@ import { MAX_INBOX_SIZE as _MAX_INBOX_SIZE } from '../company/types';
 // cycle, which TypeScript resolves without any runtime import.
 import type { AgentSlug } from './events';
 import type { OrchestratorRoleBindings } from './orchestratorRole';
+import { classifySessionLocation, type SessionLocation } from './sessionLocation';
 
 // Re-export for backward compatibility
 /** BYOB M0 — which runtime serves as a workspace's orchestrator brain.
@@ -50,6 +51,20 @@ export interface Surface {
   title: string;
   shell: string;
   cwd: string;
+  /**
+   * Domain-aware identity of WHERE THIS SURFACE'S CONTENT LIVES; absent on
+   * legacy persisted surfaces.
+   *
+   * For a terminal it is the live cwd, kept fresh by `updateSurfaceLocation`.
+   * For a surface with no pty of its own — editor, diff, browser — it is the
+   * origin of the file it opened, frozen at creation and correctly so: the file
+   * does not move when the pane's terminal changes directory.
+   *
+   * It is therefore NOT "where the user is working" for a non-terminal surface
+   * and must never be published as such (issue #46). That is the pane's fact:
+   * `sessionLocationForPane` in renderer/utils/focusedSurface.
+   */
+  location?: SessionLocation;
   surfaceType?: 'terminal' | 'browser' | 'editor' | 'diff' | 'git' | 'review';
   browserUrl?: string;
   browserPartition?: string;
@@ -1014,6 +1029,7 @@ export function createSurface(ptyId: string, shell: string, cwd: string): Surfac
     title: shell,
     shell,
     cwd,
+    location: classifySessionLocation(shell, cwd),
   };
 }
 
@@ -1295,4 +1311,3 @@ export function validateNavigationUrl(url: string): UrlValidationResult {
 
   return { valid: true };
 }
-

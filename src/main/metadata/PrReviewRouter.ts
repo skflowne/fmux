@@ -13,17 +13,18 @@
 // existing review history must not wake the brain the moment a pane checks
 // out an old PR branch.
 //
-// COST: rides entirely on existing caches. `listPrs` has a 30 s TTL per repo
-// and `prDetail` is keyed by the PR's `updatedAt` (unchanged → no gh call), so
-// the only new steady-state cost is one throttled cache read per pane per
-// CHECK_INTERVAL. The per-pane throttle is written SYNCHRONOUSLY before any
-// await, so overlapping poll ticks can't double-fetch.
+// COST: one `git rev-parse --show-toplevel` plus cached provider reads per
+// pane per CHECK_INTERVAL. `listPrs` has a 30 s TTL per repo and `prDetail` is
+// keyed by the PR's `updatedAt` (unchanged → no gh call). The per-pane throttle
+// is written SYNCHRONOUSLY before any await, so overlapping poll ticks can't
+// double-fetch.
 //
 // Pure of Electron: provider (gh), resolver and emit sink are injected —
 // production wiring lives in metadata.handler next to PrCiRouter's.
 
 import type { PrStatus } from '../../shared/types';
 import type { PrListResult, PrDetailResult } from '../github/PrProvider';
+import type { PaneCommandTarget } from '../git/paneCommand';
 import type { WorkspaceResolver } from './PrCiRouter';
 
 /** How often one pane may hit the (cached) provider. The metadata poll ticks
@@ -35,9 +36,14 @@ const SNIPPET_CAP = 140;
 
 /** The provider slice this router needs (GhPrService satisfies it). */
 export interface ReviewProvider {
-  listPrs(repoPath: string, force?: boolean): Promise<PrListResult>;
-  prDetail(repoPath: string, number: number, updatedAt: string): Promise<PrDetailResult>;
+  listPrs(repoPath: string, force?: boolean, target?: PaneCommandTarget): Promise<PrListResult>;
+  prDetail(repoPath: string, number: number, updatedAt: string, target?: PaneCommandTarget): Promise<PrDetailResult>;
 }
+
+export type RepoRootResolver = (
+  cwd: string,
+  target?: PaneCommandTarget,
+) => Promise<string | null>;
 
 export interface PrReviewEmit {
   workspaceId: string;
@@ -87,6 +93,7 @@ export class PrReviewRouter {
 
   constructor(
     private readonly provider: ReviewProvider,
+    private readonly resolveRepoRoot: RepoRootResolver,
     private readonly resolveWorkspaceId: WorkspaceResolver,
     private readonly emit: (e: PrReviewEmit) => void,
     private readonly now: () => number = Date.now,
@@ -98,7 +105,12 @@ export class PrReviewRouter {
    * Observe one pane's poll result. No PR (or no cwd context) drops the pane's
    * state so a future PR starts fresh. Throttled per pane; never throws.
    */
-  async note(ptyId: string, cwd: string, pr: PrStatus | null): Promise<void> {
+  async note(
+    ptyId: string,
+    cwd: string,
+    pr: PrStatus | null,
+    target?: PaneCommandTarget,
+  ): Promise<void> {
     if (!pr || typeof pr.number !== 'number') {
       this.panes.delete(ptyId);
       return;
@@ -115,7 +127,9 @@ export class PrReviewRouter {
     st.lastCheck = now; // sync write BEFORE any await — overlap guard
 
     try {
-      const list = await this.provider.listPrs(cwd);
+      const repoRoot = await this.resolveRepoRoot(cwd, target);
+      if (!repoRoot) return;
+      const list = await this.provider.listPrs(repoRoot, false, target);
       if (!list.ok) return;
       const summary = list.prs.find((p) => p.number === pr.number);
       if (!summary) return; // PR closed/merged out of the open list — nothing to route
@@ -136,7 +150,7 @@ export class PrReviewRouter {
           }
         }
       }
-      const detail = await this.provider.prDetail(cwd, pr.number, summary.updatedAt);
+      const detail = await this.provider.prDetail(repoRoot, pr.number, summary.updatedAt, target);
       if (!detail.ok) return;
       const comments = detail.detail.comments;
       let maxCreated = '';

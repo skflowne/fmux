@@ -112,17 +112,20 @@ describe('X6 ② reboot-survival durability', () => {
     expect(body).not.toMatch(/setImmediate\([^)]*saveImmediate/);
   });
 
-  it('session:cwd handler persists via saveAsap (immediate persist, async write)', () => {
-    // 30-session scaling: the cwd persist moved from saveImmediate (sync
-    // write on the event loop — stalls daemon.ping under fleet-wide `cd`
-    // churn) to saveAsap (persists within ms via the coalescing queue).
-    // The X6 contract this test guards is "cwd must NOT wait out the 30s
-    // debounce" — saveAsap still honors that; a revert to saveDebounced
-    // (or dropping the persist) re-opens the reboot race and fails here.
+  it('cwd candidates use the exact asynchronous transaction policy', () => {
+    // Cwd remains nonblocking at the bridge boundary, but publication waits
+    // for the transaction owner's exact ASAP write.
     const src = fs.readFileSync(daemonIndexPath, 'utf-8');
-    const body = extractEventHandlerBody(src, 'session:cwd');
-    expect(body).toMatch(/stateWriter\.saveAsap\(/);
-    expect(body).not.toMatch(/stateWriter\.saveDebounced\(/);
+    const body = extractEventHandlerBody(src, 'session:locationCandidate');
+    expect(body).toMatch(/submitDaemonSessionLocationCandidate/);
+    const transactionSource = fs.readFileSync(
+      path.join(__dirname, '..', 'sessionLocationPersistence.ts'),
+      'utf-8',
+    );
+    expect(transactionSource).toMatch(
+      /input\.reason === 'enriched' \? 'immediate-retry' : 'asap'/,
+    );
+    expect(body).not.toMatch(/saveDebounced|saveImmediate/);
   });
 
   it('useTerminal onData guards clearResumeHint against focus reports (CSI I / CSI O)', () => {
@@ -143,15 +146,19 @@ describe('X6 ② reboot-survival durability', () => {
     expect(body).toMatch(/\\x1b\[O/);
   });
 
-  it('bridge cwd handler has a change-guard so the immediate write only fires on real cd', () => {
+  it('bridge cwd handler deduplicates against producer order, not committed state', () => {
     const mgrPath = path.join(__dirname, '..', 'DaemonSessionManager.ts');
     const src = fs.readFileSync(mgrPath, 'utf-8');
     const lines = src.split('\n');
     const startIdx = lines.findIndex((l) => l.includes("bridge.on('cwd'"));
     expect(startIdx).toBeGreaterThan(-1);
     const body = lines.slice(startIdx, startIdx + 12).join('\n');
-    // Same cwd must early-return before mutating meta / emitting / persisting.
-    expect(body).toMatch(/if \(meta\.cwd === payload\.cwd\) return;/);
+    // Committed meta intentionally lags durability. Deduplicating against the
+    // producer cursor preserves /old → /new → /old reversals.
+    expect(body).toMatch(
+      /if \(managed\.locationProducerCwd === payload\.cwd\) return;/,
+    );
+    expect(body).not.toMatch(/if \(meta\.cwd === payload\.cwd\) return;/);
   });
 
   // --- X6 ③ all-pane reliability guards (Rung 0/1/3) ------------------------
@@ -170,7 +177,7 @@ describe('X6 ② reboot-survival durability', () => {
     const src = fs.readFileSync(daemonIndexPath, 'utf-8');
     const idx = src.indexOf('const applyResumeBinding =');
     expect(idx).toBeGreaterThan(-1);
-    const body = src.slice(idx, idx + 3400);
+    const body = src.slice(idx, idx + 4200);
     expect(body).toMatch(/lastDetectedAgent\s*=\s*next\.agent/);
     expect(body).toMatch(/KNOWN_AGENT_SLUGS/);
     // ...and the RPC must still route through it, or the wire path silently
@@ -206,6 +213,25 @@ describe('X6 ② reboot-survival durability', () => {
     expect(recBody).toMatch(/resumeLaunchCommand\(session, spoolBindings\.get\(session\.id\)\)/);
   });
 
+  it('D5: the exec REPLAY launch requires PROVEN existence, not merely unproven absence', () => {
+    // The launch decision is one-shot — resumeLaunchCommand runs at recovery and
+    // no later poll can rewrite the command a pane already started with. A cold
+    // WSL distro at daemon boot answers nothing, so "cannot prove it dead" (right
+    // for the polling call sites) would hand a possibly purged id to
+    // `--resume`, which prints "No conversation found." and exits 0 with no exit
+    // code to fall back on. The polling sites must NOT be tightened with it: they
+    // are revisited, and requiring proof there is what dropped bindings in #29.
+    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const idx = src.indexOf('function resumeLaunchCommand');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, src.indexOf('\n}', idx));
+    expect(body).toMatch(
+      /bindingTranscriptLives\(binding, session, \{ requireProof: true \}\)/,
+    );
+    // ...and the strictness is opt-in per call site, not the probe's own rule.
+    expect(src).toMatch(/const probe = opts\?\.requireProof \? transcriptFileProvenLive : transcriptFileLives;/);
+  });
+
   it('Rung 3: spool ingest guards — F7 cwd-match, D5 existence-probe, no stale clobber', () => {
     const src = fs.readFileSync(daemonIndexPath, 'utf-8');
     const idx = src.indexOf('function ingestResumeSpool');
@@ -214,12 +240,14 @@ describe('X6 ② reboot-survival durability', () => {
     // Attribute by EXACT pane id, not cwd guessing.
     expect(body).toMatch(/sessionManager\.getSession\(ptyId\)/);
     // F7: origin cwd must match the recovered pane cwd (normalized — codex P2).
-    expect(body).toMatch(/normalizeResumeCwd\(binding\.cwd\) !== normalizeResumeCwd\(managed\.meta\.cwd\)/);
+    expect(body).toMatch(
+      /resumeBindingMatchesLocation\(\s*binding,\s*managed\.meta\.cwd,\s*managed\.meta\.location,\s*process\.platform/,
+    );
     // Never let an older spooled capture overwrite a newer live one, and skip a
     // same-conversation spool (codex P2).
     expect(body).toMatch(/prev\.ts >= binding\.ts/);
     expect(body).toMatch(/prev\.sessionId === binding\.sessionId/);
     // D5: purged transcript → drop, never offer a dead --resume.
-    expect(body).toMatch(/bindingTranscriptLives\(binding\)/);
+    expect(body).toMatch(/bindingTranscriptLives\(binding, managed\.meta\)/);
   });
 });

@@ -21,6 +21,49 @@ import type {
   LanLinkPeersListResult,
 } from '../shared/lanlink';
 import type { WebStartArgs, WebTerminalInfo } from '../shared/web';
+import {
+  type SessionLocationSnapshot,
+} from '../shared/sessionLocation';
+import {
+  type SessionLocationDiscoveryAuthority,
+} from '../shared/orderedSessionLocationProjection';
+import { PreloadSessionLocationProjection } from './sessionLocationProjection';
+
+const projectedLocations = new PreloadSessionLocationProjection();
+ipcRenderer.on('daemon:connected', () => {
+  projectedLocations.reset();
+});
+
+function projectLocationResponse<T extends {
+  id?: string;
+  locationSnapshot?: SessionLocationSnapshot;
+}>(
+  response: T,
+  authority: SessionLocationDiscoveryAuthority,
+): T {
+  const projected = projectedLocations.projectResponse(response, authority);
+  if (projected.deliverable) {
+    ipcRenderer.emit(
+      IPC.LOCATION_CHANGED,
+      {} as Electron.IpcRendererEvent,
+      projected.response.id,
+      projected.response.locationSnapshot,
+      true,
+    );
+  }
+  return projected.response;
+}
+
+function projectLocationEvent(
+  ptyId: string,
+  snapshot: SessionLocationSnapshot,
+): boolean {
+  return projectedLocations.acceptEvent(ptyId, snapshot);
+}
+
+function releaseProjectedLocation(ptyId: string): void {
+  projectedLocations.release(ptyId);
+}
 
 /** Mirrors {@link McpStatusPayload} in src/main/ipc/handlers/mcp.handler.ts. */
 export interface McpTargetStatusPayload {
@@ -47,23 +90,47 @@ const electronAPI = {
     // wmux.json leaf — `exec` runs the command as the pane's ROOT process and
     // `supervision` arms the daemon's PaneSupervisor (daemon mode only; the
     // local branch ignores them with a one-time warning toast).
-    create: (options?: { shell?: string; cwd?: string; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean } }) =>
-      ipcRenderer.invoke(IPC.PTY_CREATE, options),
+    create: async (options?: { shell?: string; cwd?: string; cols?: number; rows?: number; workspaceId?: string; surfaceId?: string; env?: Record<string, string>; initialCommand?: string; exec?: string; supervision?: { restart: 'on-failure' | 'always'; limit?: { burst?: number; healthyUptimeSec?: number }; restorePermissionMode?: boolean } }) => {
+      const authority = projectedLocations.beginDiscovery();
+      try {
+        const result = await ipcRenderer.invoke(IPC.PTY_CREATE, options) as {
+          id: string;
+          shell?: string;
+          cwd?: string;
+          locationSnapshot?: SessionLocationSnapshot;
+        };
+        return projectLocationResponse(result, authority);
+      } finally {
+        projectedLocations.finishDiscovery(authority);
+      }
+    },
     write: (id: string, data: string) => {
       ipcRenderer.send(IPC.PTY_WRITE, id, data);
     },
     resize: (id: string, cols: number, rows: number) =>
       ipcRenderer.invoke(IPC.PTY_RESIZE, id, cols, rows),
-    dispose: (id: string) =>
-      ipcRenderer.invoke(IPC.PTY_DISPOSE, id),
+    dispose: async (id: string) => {
+      try {
+        return await ipcRenderer.invoke(IPC.PTY_DISPOSE, id);
+      } finally {
+        releaseProjectedLocation(id);
+      }
+    },
     // `supervision` (X8) is additive and present only on supervised daemon-mode
     // sessions — the renderer uses it to hydrate its supervision slice on boot
     // and daemon-reconnect. Absent in local mode and for unsupervised panes.
-    list: () =>
+    list: async () => {
+      const authority = projectedLocations.beginDiscovery();
+      try {
       // `surfaceId` (axis B, reboot-reattach): present only on sessions created
       // WITH a WMUX_SURFACE_ID (Terminal self-create path); reconcile uses it to
       // rebind a stale ptyId to the surviving session after a reboot.
-      ipcRenderer.invoke(IPC.PTY_LIST) as Promise<{ id: string; shell: string; surfaceId?: string; createdAt?: string; supervision?: { status: 'armed' | 'stopped'; restartCount: number }; resumeAgent?: string; resumeBinding?: ResumeBinding; commandRunning?: boolean; agentProcessAlive?: boolean }[]>,
+        const result = await ipcRenderer.invoke(IPC.PTY_LIST) as Array<{ id: string; shell: string; cwd?: string; locationSnapshot?: SessionLocationSnapshot; surfaceId?: string; createdAt?: string; supervision?: { status: 'armed' | 'stopped'; restartCount: number }; resumeAgent?: string; resumeBinding?: ResumeBinding; commandRunning?: boolean; agentProcessAlive?: boolean }>;
+        return result.map((session) => projectLocationResponse(session, authority));
+      } finally {
+        projectedLocations.finishDiscovery(authority);
+      }
+    },
     // TASK-6 — per-pane agent RAM for the Fleet View cockpit. Given the ptyIds
     // currently shown as cards, returns { [ptyId]: { rss (bytes), image? } } by
     // walking each pane shell's descendant process tree from ONE CIM snapshot.
@@ -73,12 +140,19 @@ const electronAPI = {
     // process name (e.g. "claude.exe").
     resources: (ptyIds: string[]) =>
       ipcRenderer.invoke(IPC.PANE_RESOURCES, ptyIds) as Promise<Record<string, { rss: number; image?: string }>>,
-    reconnect: (id: string) =>
+    reconnect: async (id: string) => {
+      const authority = projectedLocations.beginDiscovery();
+      try {
       // RCA A1 — `transient` distinguishes a recoverable failure (pipe not
       // writable yet, RPC threw during a handler-swap window) from a permanent
       // one (session genuinely dead). The renderer retries transient failures
       // instead of immediately clearing the ptyId and replacing the session.
-      ipcRenderer.invoke(IPC.PTY_RECONNECT, id) as Promise<{ success: boolean; id?: string; shell?: string; error?: string; code?: string; transient?: boolean }>,
+        const result = await ipcRenderer.invoke(IPC.PTY_RECONNECT, id) as { success: boolean; id?: string; shell?: string; locationSnapshot?: SessionLocationSnapshot; error?: string; code?: string; transient?: boolean };
+        return projectLocationResponse(result, authority);
+      } finally {
+        projectedLocations.finishDiscovery(authority);
+      }
+    },
     // Phase 3 PR-B — live-pipe re-flush. Unlike `reconnect` (opens a fresh
     // socket), this re-runs the flush on the EXISTING session socket, so input
     // never pauses. Three success shapes: a live re-flush ('snapshot'|'raw'), a
@@ -105,7 +179,17 @@ const electronAPI = {
       return () => { ipcRenderer.removeListener(IPC.PTY_DATA, listener); };
     },
     onExit: (callback: (id: string, exitCode: number) => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, id: string, exitCode: number) => callback(id, exitCode);
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        id: string,
+        exitCode: number,
+        locationGeneration?: number,
+      ) => {
+        if (locationGeneration !== undefined) {
+          projectedLocations.retireAndRelease(id, locationGeneration);
+        }
+        callback(id, exitCode);
+      };
       ipcRenderer.on(IPC.PTY_EXIT, listener);
       return () => { ipcRenderer.removeListener(IPC.PTY_EXIT, listener); };
     },
@@ -153,12 +237,13 @@ const electronAPI = {
     list: () => ipcRenderer.invoke(IPC.SHELL_LIST) as Promise<{ name: string; path: string; args?: string[] }[]>,
     openExternal: (url: string) => ipcRenderer.invoke(IPC.SHELL_OPEN_EXTERNAL, url) as Promise<void>,
     // Open an absolute filesystem path in the OS default app / explorer.
-    // Backed by Electron's shell.openPath; main validates the path is
-    // absolute, length-capped, and free of NUL bytes. Resolves with
+    // The originating PTY lets main resolve WSL/MSYS paths into a host path
+    // before validation. Backed by Electron's shell.openPath; main validates
+    // the resolved path is absolute, length-capped, and free of NUL bytes. Resolves with
     // { ok, error? } — on `ok=false` main has already revealed the parent
     // folder via showItemInFolder, so the renderer typically ignores it.
-    openPath: (filePath: string) =>
-      ipcRenderer.invoke(IPC.SHELL_OPEN_PATH, filePath) as Promise<{ ok: boolean; error?: string }>,
+    openPath: (filePath: string, ptyId: string) =>
+      ipcRenderer.invoke(IPC.SHELL_OPEN_PATH, { path: filePath, ptyId }) as Promise<{ ok: boolean; error?: string }>,
   },
   fonts: {
     // Best-effort list of installed font-family names for the Settings font
@@ -240,6 +325,24 @@ const electronAPI = {
         callback(ptyId, cwd);
       ipcRenderer.on(IPC.CWD_CHANGED, listener);
       return () => { ipcRenderer.removeListener(IPC.CWD_CHANGED, listener); };
+    },
+    onLocationChanged: (
+      callback: (ptyId: string, snapshot: SessionLocationSnapshot) => void,
+    ) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        ptyId: string,
+        snapshot: SessionLocationSnapshot,
+        alreadyProjected?: boolean,
+      ) => {
+        if (!alreadyProjected && !projectLocationEvent(ptyId, snapshot)) return;
+        callback(ptyId, snapshot);
+      };
+      ipcRenderer.on(IPC.LOCATION_CHANGED, listener);
+      for (const [ptyId, snapshot] of projectedLocations.snapshots()) {
+        callback(ptyId, snapshot);
+      }
+      return () => { ipcRenderer.removeListener(IPC.LOCATION_CHANGED, listener); };
     },
     onGitBranchChanged: (callback: (ptyId: string, branch: string) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, ptyId: string, branch: string) =>
@@ -472,8 +575,8 @@ const electronAPI = {
       resume: (workspaceId: string) =>
         ipcRenderer.invoke(IPC.DECK_LOOP_RESUME, { workspaceId }) as Promise<{ ok: boolean }>,
       // Skill picker material — pane agent's skill/command catalog (read-only scan).
-      skills: (cwd: string) =>
-        ipcRenderer.invoke(IPC.DECK_LOOP_SKILLS, cwd) as Promise<{
+      skills: (location: import('../shared/sessionLocation').SessionLocation) =>
+        ipcRenderer.invoke(IPC.DECK_LOOP_SKILLS, { location }) as Promise<{
           skills: import('../main/deck/skillCatalogScan').SkillCatalogEntry[];
         }>,
     },
@@ -635,11 +738,16 @@ const electronAPI = {
     },
   },
   fs: {
-    readDir: (dirPath: string) => ipcRenderer.invoke(IPC.FS_READ_DIR, dirPath),
-    readFile: (filePath: string) => ipcRenderer.invoke(IPC.FS_READ_FILE, filePath) as Promise<string | null>,
-    writeFile: (filePath: string, content: string) => ipcRenderer.invoke(IPC.FS_WRITE_FILE, filePath, content) as Promise<boolean>,
-    watch: (dirPath: string) => ipcRenderer.invoke(IPC.FS_WATCH, dirPath),
-    unwatch: (dirPath: string) => ipcRenderer.invoke(IPC.FS_UNWATCH, dirPath),
+    readDir: (dirPath: string, location: import('../shared/sessionLocation').SessionLocation) =>
+      ipcRenderer.invoke(IPC.FS_READ_DIR, { path: dirPath, location }),
+    readFile: (filePath: string, location: import('../shared/sessionLocation').SessionLocation) =>
+      ipcRenderer.invoke(IPC.FS_READ_FILE, { path: filePath, location }) as Promise<string | null>,
+    writeFile: (filePath: string, content: string, location: import('../shared/sessionLocation').SessionLocation) =>
+      ipcRenderer.invoke(IPC.FS_WRITE_FILE, { path: filePath, location }, content) as Promise<boolean>,
+    watch: (dirPath: string, location: import('../shared/sessionLocation').SessionLocation) =>
+      ipcRenderer.invoke(IPC.FS_WATCH, { path: dirPath, location }),
+    unwatch: (dirPath: string, location: import('../shared/sessionLocation').SessionLocation) =>
+      ipcRenderer.invoke(IPC.FS_UNWATCH, { path: dirPath, location }),
     onChanged: (callback: (dirPath: string) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, dirPath: string) => callback(dirPath);
       ipcRenderer.on(IPC.FS_CHANGED, listener);
@@ -647,7 +755,14 @@ const electronAPI = {
     },
   },
   git: {
-    status: (cwd: string) => ipcRenderer.invoke(IPC.GIT_STATUS, cwd) as Promise<string>,
+    /**
+     * `target` is either a bare cwd (every pre-location caller) or a parsed
+     * `SessionLocation`. Main validates it with `parseSessionLocation`, which
+     * accepts both, so a WSL/MSYS caller can keep its domain instead of
+     * flattening to a string main would read as a host path.
+     */
+    status: (target: string | import('../shared/sessionLocation').SessionLocation) =>
+      ipcRenderer.invoke(IPC.GIT_STATUS, target) as Promise<string>,
   },
   // J2 — diff review·hunk adopt. worktreePath is task worktree, targetHeadOid is
   // target HEAD at task branch point (drift gate material).
@@ -749,8 +864,8 @@ const electronAPI = {
   // nearest wmux.json + trust state; `setTrust` persists a user decision
   // bound to the contentHash the approval dialog displayed.
   projectConfig: {
-    get: (cwd: string) =>
-      ipcRenderer.invoke(IPC.PROJECT_CONFIG_GET, cwd) as Promise<import('../shared/wmuxProjectConfig').ProjectConfigState>,
+    get: (location: import('../shared/sessionLocation').SessionLocation) =>
+      ipcRenderer.invoke(IPC.PROJECT_CONFIG_GET, { location }) as Promise<import('../shared/wmuxProjectConfig').ProjectConfigState>,
     setTrust: (root: string, decision: 'trusted' | 'denied' | 'clear', contentHash?: string, unattended?: boolean) =>
       ipcRenderer.invoke(IPC.PROJECT_CONFIG_SET_TRUST, root, decision, contentHash, unattended === true) as Promise<{ ok: boolean }>,
   },

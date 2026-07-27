@@ -27,6 +27,7 @@ import { tokenAttrs } from '../../themes';
 import { FOCUS_RING } from '../focusRing';
 import { DeckLoopModal } from './DeckLoopModal';
 import type { WorkspaceLoopState, LoopTier } from '../../../main/deck/deckLoopStateStore';
+import type { SessionLocation } from '../../../shared/sessionLocation';
 
 export interface DeckLoopApi {
   get: (workspaceId: string) => Promise<{
@@ -54,20 +55,20 @@ export interface DeckLoopApi {
   pause: (workspaceId: string) => Promise<{ ok: boolean }>;
   resume: (workspaceId: string) => Promise<{ ok: boolean }>;
   /** Skill picker catalog (optional — may be absent on older preload). */
-  skills?: (cwd: string) => Promise<{ skills: import('../../../main/deck/skillCatalogScan').SkillCatalogEntry[] }>;
+  skills?: (location: SessionLocation) => Promise<{ skills: import('../../../main/deck/skillCatalogScan').SkillCatalogEntry[] }>;
 }
 
 export function DeckLoopPanel({
   api,
   workspaceId,
-  cwd,
+  location,
   t: tProp,
 }: {
   api?: DeckLoopApi;
   /** The workspace this deck view is bound to — the loop is per-workspace. */
   workspaceId?: string;
-  /** Active pane cwd — skill catalog scan basis for modal (optional). */
-  cwd?: string;
+  /** Authoritative active pane location for project skill discovery. */
+  location?: SessionLocation;
   t?: (key: string) => string;
 }): React.ReactElement | null {
   const t = tProp ?? (() => '');
@@ -242,7 +243,7 @@ export function DeckLoopPanel({
         <DeckLoopModal
           api={resolvedApi}
           workspaceId={workspaceId}
-          cwd={cwd}
+          location={location}
           modeApi={
             (window.electronAPI as unknown as { deck?: { mode?: import('./AgentModeChip').AgentModeApi } } | undefined)
               ?.deck?.mode

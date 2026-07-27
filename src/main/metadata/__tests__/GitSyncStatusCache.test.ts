@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { GitSyncStatusCache, parsePorcelainV2 } from '../GitSyncStatusCache';
 
+const host = (cwd: string, sessionId = 'pty-host') => ({
+  sessionId,
+  location: { domain: 'host' as const, cwd, shell: 'pwsh.exe' },
+});
+
 describe('parsePorcelainV2', () => {
   it('parses ahead/behind and counts every dirty entry kind', () => {
     const stdout = [
@@ -53,23 +58,44 @@ describe('GitSyncStatusCache', () => {
     const exec = vi.fn().mockResolvedValue({ stdout: CLEAN });
     const cache = new GitSyncStatusCache(() => now, exec);
 
-    expect(await cache.get('D:\\repo')).toEqual({ dirty: 0, ahead: 1, behind: 0, hasUpstream: true });
+    expect(await cache.get(host('D:\\repo'))).toEqual({ dirty: 0, ahead: 1, behind: 0, hasUpstream: true });
     expect(exec).toHaveBeenCalledTimes(1);
 
     now = 10_000;
-    await cache.get('D:\\repo');
+    await cache.get(host('D:\\repo'));
     expect(exec).toHaveBeenCalledTimes(1); // still cached
 
     now = 20_000;
-    await cache.get('D:\\repo');
+    await cache.get(host('D:\\repo'));
     expect(exec).toHaveBeenCalledTimes(2); // TTL expired
   });
 
-  it('normalizes the cwd key (separators/trailing slash collapse onto one entry)', async () => {
+  it('isolates cache entries by domain and distro', async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: CLEAN });
     const cache = new GitSyncStatusCache(() => 0, exec);
-    await cache.get('D:\\repo');
-    await cache.get('D:/repo/');
+    await cache.get(host('D:\\repo'));
+    await cache.get({
+      sessionId: 'pty-ubuntu',
+      location: { domain: 'wsl', cwd: '/repo', shell: 'wsl.exe', distro: 'Ubuntu' },
+      activeContext: { sessionId: 'pty-ubuntu', active: true, distro: 'Ubuntu' },
+    });
+    await cache.get({
+      sessionId: 'pty-debian',
+      location: { domain: 'wsl', cwd: '/repo', shell: 'wsl.exe', distro: 'Debian' },
+      activeContext: { sessionId: 'pty-debian', active: true, distro: 'Debian' },
+    });
+    expect(exec).toHaveBeenCalledTimes(3);
+  });
+
+  it('normalizes the cwd key (separator/trailing-slash/case variance collapse onto one entry)', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: CLEAN });
+    const cache = new GitSyncStatusCache(() => 0, exec);
+    await cache.get(host('D:\\repo'));
+    await cache.get(host('D:/repo/'));
+    await cache.get(host('d:\\REPO'));
+    // A bare worktree path (the pre-location caller form) must land on the
+    // same entry the pane target created — locationIdentity owns the folding.
+    await cache.get('D:/Repo//');
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
@@ -77,8 +103,9 @@ describe('GitSyncStatusCache', () => {
     let resolve!: (v: { stdout: string }) => void;
     const exec = vi.fn().mockReturnValue(new Promise<{ stdout: string }>((r) => { resolve = r; }));
     const cache = new GitSyncStatusCache(() => 0, exec);
-    const p1 = cache.get('D:\\repo');
-    const p2 = cache.get('D:\\repo');
+    const target = host('D:\\repo');
+    const p1 = cache.get(target);
+    const p2 = cache.get(target);
     resolve({ stdout: CLEAN });
     const [a, b] = await Promise.all([p1, p2]);
     expect(exec).toHaveBeenCalledTimes(1);
@@ -88,17 +115,162 @@ describe('GitSyncStatusCache', () => {
   it('failures resolve null quietly and are cached for the TTL window', async () => {
     const exec = vi.fn().mockRejectedValue(new Error('not a git repository'));
     const cache = new GitSyncStatusCache(() => 0, exec);
-    expect(await cache.get('D:\\notrepo')).toBeNull();
-    expect(await cache.get('D:\\notrepo')).toBeNull();
+    expect(await cache.get(host('D:\\notrepo'))).toBeNull();
+    expect(await cache.get(host('D:\\notrepo'))).toBeNull();
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
-  it('invalidate() forces a refetch before the TTL', async () => {
+  it('invalidate() forces a refetch before the TTL, across cwd spellings', async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: CLEAN });
     const cache = new GitSyncStatusCache(() => 0, exec);
-    await cache.get('D:\\repo');
-    cache.invalidate('D:/repo/');
-    await cache.get('D:\\repo');
+    await cache.get(host('D:\\repo'));
+    // Deliberately a DIFFERENT spelling of the same directory: an invalidate
+    // that only works on the identical object proves nothing about the key.
+    cache.invalidate('d:/repo/');
+    await cache.get(host('D:\\repo'));
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not invoke wsl.exe without the active pane context', async () => {
+    const exec = vi.fn().mockResolvedValue({ stdout: CLEAN });
+    const cache = new GitSyncStatusCache(() => 0, exec);
+    expect(await cache.get({
+      sessionId: 'pty-current',
+      location: { domain: 'wsl', cwd: '/repo', shell: 'wsl.exe', distro: 'Ubuntu' },
+      activeContext: { sessionId: 'pty-stale', active: true, distro: 'Ubuntu' },
+    })).toBeNull();
+    expect(exec).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Issue 42 — a fetch that settles after its entry is gone must write nothing.
+ *
+ * Every case here mutates the cache map in the window between a fetch starting
+ * and settling. That window is the whole bug, and no test above ever opened it:
+ * the pre-existing `invalidate()` test drops the entry only after awaiting the
+ * fetch, so nothing is ever in flight when the map changes.
+ *
+ * The trigger is live, not theoretical — `WorkspaceContextRouter.ts` invalidates
+ * this cache on every HEAD move (branch switch, commit, reset), while the 5 s
+ * metadata poll has a `git status` open against the same key.
+ */
+describe('GitSyncStatusCache — orphaned settled fetches', () => {
+  const status = (ahead: number) =>
+    `# branch.head main\n# branch.upstream origin/main\n# branch.ab +${ahead} -0\n`;
+  const parsed = (ahead: number) => ({ dirty: 0, ahead, behind: 0, hasUpstream: true });
+
+  /** An exec whose every call is settled by the test, in call order. */
+  function deferredExec() {
+    const settles: Array<(v: { stdout: string }) => void> = [];
+    const exec = vi.fn().mockImplementation(
+      () => new Promise<{ stdout: string }>((resolve) => { settles.push(resolve); }),
+    );
+    return { exec, settles };
+  }
+
+  it('an invalidate mid-fetch is not undone by the settled write', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new GitSyncStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'));
+    cache.invalidate('D:/repo');
+    settles[0]({ stdout: status(1) });
+    await inFlight;
+
+    // The entry was dropped, so the next poll must go back to git.
+    const next = cache.get(host('D:/repo'));
+    expect(exec).toHaveBeenCalledTimes(2);
+    settles[1]({ stdout: status(1) });
+    await next;
+  });
+
+  it('an orphaned fetch does not overwrite the newer entry that replaced it', async () => {
+    // A moving clock, so this also pins *when* the surviving entry says it was
+    // fetched. With a frozen clock the settled write could skip its timestamp
+    // entirely and nothing would notice — and an entry whose age never advances
+    // re-spawns git on every poll once its first window closes.
+    let now = 0;
+    const { exec, settles } = deferredExec();
+    const cache = new GitSyncStatusCache(() => now, exec);
+
+    const gen1 = cache.get(host('D:/repo'));
+    cache.invalidate('D:/repo');
+    const gen2 = cache.get(host('D:/repo'));
+    expect(exec).toHaveBeenCalledTimes(2);
+
+    now = 1_000;
+    settles[1]({ stdout: status(9) });
+    await gen2;
+    // The pre-invalidate fetch lands last, carrying the pre-commit answer.
+    now = 2_000;
+    settles[0]({ stdout: status(1) });
+    await gen1;
+
+    // Inside gen2's window, measured from gen2's own stamp of 1_000.
+    now = 15_000;
+    expect(await cache.get(host('D:/repo'))).toEqual(parsed(9));
+    expect(exec).toHaveBeenCalledTimes(2);
+
+    // Past it: the entry must age from gen2's stamp, not from 0 and not from
+    // the orphan's later one.
+    now = 16_001;
+    const third = cache.get(host('D:/repo'));
+    expect(exec).toHaveBeenCalledTimes(3);
+    settles[2]({ stdout: status(5) });
+    expect(await third).toEqual(parsed(5));
+  });
+
+  it('a clear mid-fetch is not undone by the settled write', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new GitSyncStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'));
+    cache.clear();
+    settles[0]({ stdout: status(1) });
+    await inFlight;
+
+    const next = cache.get(host('D:/repo'));
+    expect(exec).toHaveBeenCalledTimes(2);
+    settles[1]({ stdout: status(1) });
+    await next;
+  });
+
+  it('a fetch evicted mid-flight does not resurrect its key or clobber the refetch', async () => {
+    const evicted: Array<(v: { stdout: string }) => void> = [];
+    const exec = vi.fn().mockImplementation((_file: string, _args: string[], opts: { cwd?: string }) => {
+      if (opts.cwd === 'D:/repo0') {
+        return new Promise<{ stdout: string }>((resolve) => { evicted.push(resolve); });
+      }
+      return Promise.resolve({ stdout: status(0) });
+    });
+    const cache = new GitSyncStatusCache(() => 0, exec);
+
+    const orphan = cache.get(host('D:/repo0'));
+    // 256 further keys push the ceiling past the entry the orphan belongs to.
+    for (let i = 1; i <= 256; i++) await cache.get(host(`D:/filler${i}`));
+
+    const refetch = cache.get(host('D:/repo0'));
+    expect(evicted).toHaveLength(2); // it really was evicted and probed again
+    evicted[1]({ stdout: status(9) });
+    await refetch;
+
+    evicted[0]({ stdout: status(1) });
+    await orphan;
+
+    expect(await cache.get(host('D:/repo0'))).toEqual(parsed(9));
+  });
+
+  it('still resolves the original caller with the value its own fetch returned', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new GitSyncStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'));
+    cache.invalidate('D:/repo');
+    settles[0]({ stdout: status(3) });
+
+    // Quiet absence is the contract: dropping the entry must not make an
+    // outstanding get() hang or throw.
+    await expect(inFlight).resolves.toEqual(parsed(3));
   });
 });

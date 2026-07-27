@@ -12,6 +12,11 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import {
+  parseSessionLocation,
+  toHostAccessiblePath,
+  type SessionLocation,
+} from '../../shared/sessionLocation';
 
 export interface SkillCatalogEntry {
   /** Name without leading slash — UI renders as `/${name}`. */
@@ -99,9 +104,24 @@ function scanRoot(claudeDir: string, source: 'project' | 'user', out: SkillCatal
  * Skill/command catalog for cwd. Project entries first (closer = more relevant);
  * same name: project shadows user-global (same as CLI resolution).
  */
-export function scanSkillCatalog(cwd: string, home: string = homedir()): SkillCatalogEntry[] {
+export interface SkillCatalogScanOptions {
+  toHostPath?: typeof toHostAccessiblePath;
+}
+
+export function scanSkillCatalog(
+  input: string | SessionLocation,
+  home: string = homedir(),
+  options: SkillCatalogScanOptions = {},
+): SkillCatalogEntry[] {
   const out: SkillCatalogEntry[] = [];
-  const projectRoot = cwd ? findProjectRoot(cwd, home) : null;
+  // `parseSessionLocation` owns the wire contract (issue #21) — including
+  // `msys`, whose project skills this scan used to drop. Reachability of the
+  // resulting path is `toHostAccessiblePath`'s call, not a local sniff.
+  const location = parseSessionLocation(input);
+  const converted = location
+    ? (options.toHostPath ?? toHostAccessiblePath)(location, location.cwd)
+    : null;
+  const projectRoot = converted?.ok ? findProjectRoot(converted.path, home) : null;
   if (projectRoot) scanRoot(join(projectRoot, '.claude'), 'project', out);
   scanRoot(join(home, '.claude'), 'user', out);
   // Name dedup — project wins (pushed first).

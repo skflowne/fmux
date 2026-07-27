@@ -15,6 +15,19 @@ import { sendToRenderer } from '../../pipe/handlers/_bridge';
 import { PrCiRouter } from '../../metadata/PrCiRouter';
 import { PrReviewRouter } from '../../metadata/PrReviewRouter';
 import { ghPrService } from '../../github/GhPrService';
+import {
+  classifySessionLocation,
+  createSessionCommandTarget,
+  locationIdentity,
+  locationsEqual,
+  type SessionLocation,
+  type SessionLocationSnapshot,
+} from '../../../shared/sessionLocation';
+import { resolveWslDistro } from '../../pty/wslDistro';
+import { SessionLocationEnricher } from '../../../shared/sessionLocationEnrichment';
+import { paneCommandIdentity, type PaneCommandTarget } from '../../git/paneCommand';
+import { resolveGitToplevel } from '../../git/git';
+import { isPlausibleSessionCwd } from '../../../shared/cwdShape';
 
 // AO-style CI feedback (owner decision 2026-07-18). Module singletons set at
 // registration (they need getWindow for workspace resolution). The poll feeds
@@ -67,8 +80,70 @@ export function shouldPollMetadata(win: BrowserWindow): boolean {
 
 const collector = new MetadataCollector();
 
-// Track CWD per ptyId (updated via OSC 7, prompt detection, or initial registration)
+// Track CWD per ptyId (updated via OSC 7, prompt detection, or initial
+// registration). SOLE owner of "where is this pane right now" — see
+// getPaneCommandTarget.
 const cwdMap = new Map<string, string>();
+
+/**
+ * The part of a pane's identity that its cwd cannot change: which interpreter
+ * the pane runs (`shell`) and, for WSL, which distribution it runs in.
+ *
+ * Issue #21 I2: the pane's `SessionLocation` is DERIVED from this plus the live
+ * `cwdMap` entry rather than stored alongside it. Holding a second copy of the
+ * cwd here is what made a pane keep reporting the original repo's branch / PR /
+ * dirty counts forever after a `cd` — the live feed (OSC 7, prompt scrape,
+ * daemon `session:cwd`) writes `cwdMap`, while the location copy was refreshed
+ * at only four registration sites. One piece of state, one writer.
+ */
+interface PaneIdentity {
+  shell: string;
+  distro?: string;
+}
+const paneIdentities = new Map<string, PaneIdentity>();
+const paneLocationEnricher = new SessionLocationEnricher(
+  (shell) => resolveWslDistro({ shell }),
+);
+const paneLocationSnapshots = new Map<string, SessionLocationSnapshot>();
+type PaneLocationListener = (ptyId: string, snapshot: SessionLocationSnapshot) => void;
+const paneLocationListeners = new Set<PaneLocationListener>();
+let lastPaneLocationGeneration = 0;
+
+function nextPaneLocationGeneration(): number {
+  lastPaneLocationGeneration = Math.max(lastPaneLocationGeneration + 1, Date.now());
+  return lastPaneLocationGeneration;
+}
+
+function publishPaneLocation(
+  ptyId: string,
+  location: SessionLocation,
+  newGeneration = false,
+): SessionLocationSnapshot {
+  const previous = paneLocationSnapshots.get(ptyId);
+  const snapshot: SessionLocationSnapshot = {
+    generation: newGeneration || !previous
+      ? nextPaneLocationGeneration()
+      : previous.generation,
+    revision: newGeneration || !previous ? 1 : previous.revision + 1,
+    location,
+  };
+  paneLocationSnapshots.set(ptyId, snapshot);
+  for (const listener of paneLocationListeners) {
+    try { listener(ptyId, snapshot); } catch { /* projection errors must not break PTY flow */ }
+  }
+  return snapshot;
+}
+
+export function onPaneLocationUpdate(listener: PaneLocationListener): () => void {
+  paneLocationListeners.add(listener);
+  return () => { paneLocationListeners.delete(listener); };
+}
+
+export function getPaneLocationSnapshot(
+  ptyId: string,
+): SessionLocationSnapshot | undefined {
+  return paneLocationSnapshots.get(ptyId);
+}
 
 // Track git branch per ptyId. X1: fed by the fs.watch GitContextWatcher
 // (daemon broadcast → WorkspaceContextRouter, or localContextWatch in local
@@ -102,19 +177,20 @@ export function onCwdUpdate(listener: CwdListener): () => void {
 async function buildMetadataPayload(ptyId: string): Promise<MetadataUpdatePayload | null> {
   const cwd = cwdMap.get(ptyId);
   if (!cwd) return null;
+  const target = getPaneCommandTarget(ptyId);
   // Watcher/shell-integration branch wins; exec git only as fallback so a
   // session that predates the watcher (or a watch failure) still resolves.
-  const gitBranch = branchMap.get(ptyId) ?? (await collector.getGitBranch(cwd)) ?? '';
+  const gitBranch = branchMap.get(ptyId) ?? (target ? await collector.getGitBranch(target) : undefined) ?? '';
   const payload: MetadataUpdatePayload = { ptyId, cwd, gitBranch };
   const isWorktree = worktreeMap.get(ptyId);
   if (isWorktree !== undefined) payload.gitIsWorktree = isWorktree;
   const ports = portsMap.get(ptyId);
   if (ports !== undefined) payload.listeningPorts = ports;
   if (gitBranch) {
-    payload.pr = await prStatusCache.get(cwd, gitBranch);
+    payload.pr = target ? await prStatusCache.get(target, gitBranch) : null;
     // Rides the same 5 s tick behind a 15 s TTL — one git subprocess per
     // repo per TTL window (same cost discipline as the gh cache above).
-    payload.gitSync = await gitSyncStatusCache.get(cwd);
+    payload.gitSync = target ? await gitSyncStatusCache.get(target) : null;
   } else {
     payload.pr = null;
     payload.gitSync = null;
@@ -158,6 +234,7 @@ export async function runMetadataPollTick(
     const instance = ptyManager.get(ptyId);
     if (localPtyOwnership && !instance) {
       cwdMap.delete(ptyId);
+      removePaneLocation(ptyId);
       branchMap.delete(ptyId);
       worktreeMap.delete(ptyId);
       portsMap.delete(ptyId);
@@ -182,7 +259,14 @@ export async function runMetadataPollTick(
     // edge/watermark-triggered and never throw, so they must not gate the
     // metadata broadcast below.
     void prCiRouter?.note(ptyId, payload.pr ?? null);
-    if (payload.cwd) void prReviewRouter?.note(ptyId, payload.cwd, payload.pr ?? null);
+    if (payload.cwd) {
+      void prReviewRouter?.note(
+        ptyId,
+        payload.cwd,
+        payload.pr ?? null,
+        getPaneCommandTarget(ptyId),
+      );
+    }
     const serialized = JSON.stringify(payload);
     // First payload for a pane always sends (no cache entry); a value that
     // reverts after a change also sends (cache holds the last SENT payload).
@@ -235,6 +319,7 @@ export function registerMetadataHandlers(
   // per pane inside the router.
   prReviewRouter = new PrReviewRouter(
     ghPrService,
+    (cwd, target) => resolveGitToplevel(target ?? cwd),
     resolvePtyWorkspace,
     (e) => {
       eventBus.emit({
@@ -366,7 +451,18 @@ export function registerMetadataHandlers(
 }
 
 export function updateCwd(ptyId: string, cwd: string): void {
+  const identity = paneIdentities.get(ptyId);
+  const location = identity
+    ? classifySessionLocation(identity.shell, cwd, identity.distro)
+    : undefined;
+  if (!isPlausibleSessionCwd(cwd, location?.domain ?? 'host', process.platform)) return;
   cwdMap.set(ptyId, cwd);
+  const previous = paneLocationSnapshots.get(ptyId);
+  if (location && previous) {
+    if (!locationsEqual(location, previous.location)) {
+      publishPaneLocation(ptyId, location);
+    }
+  }
   for (const listener of cwdListeners) {
     try { listener(ptyId, cwd); } catch { /* listener errors must not break PTY flow */ }
   }
@@ -387,6 +483,105 @@ export function removeBranch(ptyId: string): void {
 
 export function getCwd(ptyId: string): string | undefined {
   return cwdMap.get(ptyId);
+}
+
+/**
+ * Register a live pane's location. Only the cwd-independent part is kept (see
+ * PaneIdentity) — `location.cwd` is deliberately ignored, because `updateCwd`
+ * is the pane's cwd. Callers seed both; the create/reconnect paths call this
+ * first so the cwd feed's listeners see a complete pane.
+ *
+ * Issue #21 I1: a WSL pane created as bare `wsl.exe` has no distro anywhere in
+ * its location (nothing can be recovered from a `/home/...` cwd), and without
+ * one every consumer fails with `WSL_DISTRO_REQUIRED` for the pane's whole
+ * first session. Resolution is enumeration-only and never boots a distribution
+ * (see wslDistro.ts), so it is safe to arm here for every WSL pane; it lands
+ * asynchronously and the pane fails closed until it does.
+ */
+export function updatePaneLocation(
+  ptyId: string,
+  location: SessionLocation,
+  resolveDistro = true,
+): void {
+  const distro = location.domain === 'wsl' ? location.distro : undefined;
+  paneIdentities.set(ptyId, { shell: location.shell, ...(distro ? { distro } : {}) });
+  if (!resolveDistro) {
+    paneLocationEnricher.cancel(ptyId);
+    paneLocationSnapshots.delete(ptyId);
+    return;
+  }
+  publishPaneLocation(ptyId, location, true);
+  void paneLocationEnricher.enrich(
+    ptyId,
+    () => {
+      const current = paneIdentities.get(ptyId);
+      if (!current) return undefined;
+      return classifySessionLocation(
+        current.shell,
+        cwdMap.get(ptyId) ?? location.cwd,
+        current.distro,
+      );
+    },
+    (enriched) => {
+      const current = paneIdentities.get(ptyId);
+      if (!current || enriched.domain !== 'wsl' || !enriched.distro) return;
+      paneIdentities.set(ptyId, { ...current, distro: enriched.distro });
+      publishPaneLocation(ptyId, enriched);
+    },
+  );
+}
+
+export function removePaneLocation(ptyId: string): void {
+  paneLocationEnricher.cancel(ptyId);
+  paneLocationSnapshots.delete(ptyId);
+  paneIdentities.delete(ptyId);
+}
+
+/**
+ * The pane's command target, composed from its identity and its LIVE cwd.
+ *
+ * The active-session context is derived rather than stored: an entry in
+ * `paneIdentities` exists exactly while the pane is live, and a live WSL pane
+ * has by definition already established its WSL context — which is the whole
+ * point of `preparePaneCommand`'s ACTIVE_CONTEXT_REQUIRED gate (never start a
+ * distro just to answer a background poll). Storing it separately is what left
+ * the first session of every WSL pane permanently ungated (issue #21 I1).
+ */
+export function getPaneCommandTarget(ptyId: string): PaneCommandTarget | undefined {
+  const identity = paneIdentities.get(ptyId);
+  const cwd = cwdMap.get(ptyId);
+  if (!identity || !cwd) return undefined;
+  const location = classifySessionLocation(identity.shell, cwd, identity.distro);
+  return createSessionCommandTarget(ptyId, location);
+}
+
+/**
+ * The live pane that owns `location`, if any.
+ *
+ * A consumer addressed by location rather than by pane — the toolbar's
+ * `git:status`, whose payload is the active surface's location — still needs the
+ * live pane behind it, because only a live pane carries the active-session
+ * context `preparePaneCommand` requires before it will run anything in a guest
+ * (issue #30).
+ *
+ * The match is `locationIdentity` on the caller's location as given — the pane
+ * side re-derives its own through `classifySessionLocation` (`getPaneCommandTarget`),
+ * the caller's is taken at face value. That asymmetry only ever loses matches:
+ * a pane that has moved on, or one whose distro the two sides spell differently,
+ * yields no target rather than answering for the wrong guest. It does not decide
+ * whether the command may run — a pane found with its distro still unresolved is
+ * refused one layer later, by the shared gate that owns that rule. Panes that do
+ * match are interchangeable: same domain, same distro, same cwd.
+ */
+export function findPaneCommandTargetForLocation(
+  location: SessionLocation,
+): PaneCommandTarget | undefined {
+  const wanted = locationIdentity(location);
+  for (const ptyId of paneIdentities.keys()) {
+    const target = getPaneCommandTarget(ptyId);
+    if (target && paneCommandIdentity(target) === wanted) return target;
+  }
+  return undefined;
 }
 
 export function getBranch(ptyId: string): string | undefined {
