@@ -562,10 +562,16 @@ export function getPaneCommandTarget(ptyId: string): PaneCommandTarget | undefin
  * `git:status`, whose payload is the active surface's location — still needs the
  * live pane behind it, because only a live pane carries the active-session
  * context `preparePaneCommand` requires before it will run anything in a guest
- * (issue #30). The match is `locationIdentity`, which both sides derive from the
- * same `classifySessionLocation`, so a pane that has moved on or whose distro is
- * still unresolved simply does not match instead of answering for the wrong
- * guest. Panes that do match are interchangeable: same domain, distro and cwd.
+ * (issue #30).
+ *
+ * The match is `locationIdentity` on the caller's location as given — the pane
+ * side re-derives its own through `classifySessionLocation` (`getPaneCommandTarget`),
+ * the caller's is taken at face value. That asymmetry only ever loses matches:
+ * a pane that has moved on, or one whose distro the two sides spell differently,
+ * yields no target rather than answering for the wrong guest. It does not decide
+ * whether the command may run — a pane found with its distro still unresolved is
+ * refused one layer later, by the shared gate that owns that rule. Panes that do
+ * match are interchangeable: same domain, same distro, same cwd.
  */
 export function findPaneCommandTargetForLocation(
   location: SessionLocation,
