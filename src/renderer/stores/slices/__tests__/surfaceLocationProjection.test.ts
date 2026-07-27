@@ -201,6 +201,34 @@ describe('surface location snapshot projection', () => {
     expect(slice.updateSurfaceLocation('pty-1', snapshot(2, '/late'))).toBe(false);
   });
 
+  // Issue #46 — the split's load-bearing invariant. An editor seeded from the
+  // pane holds the SAME OBJECT the terminal is publishing, so the only thing
+  // keeping the file's origin frozen is that `updateSurfaceLocation` REPLACES
+  // `surface.location` rather than writing through it. An in-place field update
+  // there would silently un-freeze every editor seeded this way, and nothing
+  // else in the suite would notice.
+  it('does not move an editor origin when the terminal it was seeded from moves', () => {
+    const { state, slice } = createHarness();
+    const paneId = state.workspaces[0].rootPane.id;
+    slice.addSurface(
+      paneId,
+      'pty-1',
+      'wsl.exe',
+      '/home/me/proj',
+      undefined,
+      snapshot(1, '/home/me/proj'),
+    );
+
+    slice.addEditorSurface(paneId, '/home/me/proj/a.ts');
+    expect(slice.updateSurfaceLocation('pty-1', snapshot(2, '/home/me/proj/packages/api'))).toBe(true);
+
+    const pane = state.workspaces[0].rootPane;
+    if (pane.type !== 'leaf') throw new Error('expected leaf');
+    const editor = pane.surfaces.find((s) => s.surfaceType === 'editor')!;
+    expect(editor.location).toEqual(snapshot(1, '/home/me/proj').location);
+    expect(pane.surfaces[0].location).toEqual(snapshot(2, '/home/me/proj/packages/api').location);
+  });
+
   it('does not mint a lease for a delayed rebind after its surface disappeared', () => {
     const { slice } = createHarness();
 

@@ -3,6 +3,7 @@ import {
   activeSessionLocation,
   focusedTerminalPtyId,
   reuseEquivalentSessionLocation,
+  sessionLocationForSurface,
 } from '../focusedSurface';
 import type { Workspace } from '../../../shared/types';
 
@@ -95,6 +96,122 @@ describe('activeSessionLocation', () => {
     });
   });
 
+  // Issue #46 — a surface with no pty of its own publishes no working location.
+  // An editor/diff/browser surface cannot be told where its pane has moved to
+  // (`updateSurfaceLocation` keys on ptyId, and theirs is ''), so anything it
+  // holds is a snapshot of the moment it was opened. The pane's live terminal
+  // is the one owner of "where the user is working".
+  it('publishes the pane terminal LIVE location, not the active editor snapshot', () => {
+    const live = {
+      domain: 'wsl' as const,
+      cwd: '/home/me/proj/packages/api',
+      shell: 'wsl.exe',
+      distro: 'Ubuntu',
+    };
+    const root = leaf('p1', [
+      { id: 's1', ptyId: 'pty-1', cwd: live.cwd, shell: 'wsl.exe', location: live },
+      {
+        id: 's2',
+        ptyId: '',
+        cwd: '',
+        shell: '',
+        surfaceType: 'editor',
+        editorFilePath: '/home/me/proj/a.ts',
+        // Frozen when the file was opened, before the terminal moved.
+        location: { domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu' },
+      },
+    ], 's2');
+
+    const published = activeSessionLocation(ws(root, 'p1'));
+    expect(published).toEqual(live);
+    // The distro has to survive: `findPaneCommandTargetForLocation` folds it
+    // into the identity it matches on, and loses on a mismatch.
+    expect(published).toMatchObject({ distro: 'Ubuntu' });
+    // By reference — FileExplorerPopover and EditorPanel key effects on the
+    // identity of this object, so minting a fresh one per call re-fires them.
+    expect(published).toBe(live);
+  });
+
+  it.each(['editor', 'diff', 'browser'] as const)(
+    'resolves a pane whose active surface is a %s from the pane terminal',
+    (surfaceType) => {
+      const live = {
+        domain: 'wsl' as const,
+        cwd: '/home/me/proj',
+        shell: 'wsl.exe',
+        distro: 'Ubuntu',
+      };
+      const workspace = {
+        ...ws(leaf('p1', [
+          { id: 's1', ptyId: 'pty-1', cwd: live.cwd, shell: 'wsl.exe', location: live },
+          { id: 's2', ptyId: '', cwd: '', shell: '', surfaceType },
+        ], 's2'), 'p1'),
+        // The host mirror path a workspace fallback would wrongly hand back.
+        metadata: { cwd: 'C:\\dev\\mirror' },
+      } as Workspace;
+
+      expect(activeSessionLocation(workspace)).toBe(live);
+    },
+  );
+
+  it('falls back to the workspace when the pane holds no terminal at all', () => {
+    const workspace = {
+      ...ws(leaf('p1', [
+        { id: 's1', ptyId: '', cwd: '', shell: '', surfaceType: 'editor' },
+      ], 's1'), 'p1'),
+      metadata: { cwd: '/home/me/proj' },
+      profile: { shell: 'wsl.exe' },
+    } as Workspace;
+
+    expect(activeSessionLocation(workspace)).toEqual({
+      domain: 'wsl',
+      cwd: '/home/me/proj',
+      shell: 'wsl.exe',
+    });
+  });
+
+  it('prefers the pane active terminal over its siblings', () => {
+    const first = { domain: 'host' as const, cwd: 'C:\\dev\\first', shell: 'pwsh.exe' };
+    const active = { domain: 'host' as const, cwd: 'C:\\dev\\active', shell: 'pwsh.exe' };
+    const root = leaf('p1', [
+      { id: 's1', ptyId: 'pty-1', cwd: first.cwd, shell: 'pwsh.exe', location: first },
+      { id: 's2', ptyId: 'pty-2', cwd: active.cwd, shell: 'pwsh.exe', location: active },
+    ], 's2');
+
+    expect(activeSessionLocation(ws(root, 'p1'))).toBe(active);
+  });
+
+  // Tab order is an arbitrary but DETERMINISTIC tie-break, not a claim about
+  // which terminal the user meant. Nothing in issue #46 requires this order —
+  // it exists so two panes with the same tabs never disagree.
+  it('takes the first terminal in tab order when the active surface is not one', () => {
+    const first = { domain: 'host' as const, cwd: 'C:\\dev\\first', shell: 'pwsh.exe' };
+    const second = { domain: 'host' as const, cwd: 'C:\\dev\\second', shell: 'pwsh.exe' };
+    const root = leaf('p1', [
+      { id: 's1', ptyId: 'pty-1', cwd: first.cwd, shell: 'pwsh.exe', location: first },
+      { id: 's2', ptyId: 'pty-2', cwd: second.cwd, shell: 'pwsh.exe', location: second },
+      { id: 's3', ptyId: '', cwd: '', shell: '', surfaceType: 'editor' },
+    ], 's3');
+
+    expect(activeSessionLocation(ws(root, 'p1'))).toBe(first);
+  });
+
+  // A terminal in its reconnect window has no cwd but keeps its stored
+  // location, and a stored location is authoritative — so it publishes ahead
+  // of a live sibling. Stated rather than incidental: the walk this replaced
+  // selected on a non-empty cwd and would have skipped it.
+  it('lets a reconnecting terminal publish ahead of a live sibling', () => {
+    const reconnecting = { domain: 'wsl' as const, cwd: '/home/me/proj', shell: 'wsl.exe' };
+    const live = { domain: 'wsl' as const, cwd: '/home/me/other', shell: 'wsl.exe' };
+    const root = leaf('p1', [
+      { id: 's1', ptyId: 'pty-1', cwd: '', shell: '', location: reconnecting },
+      { id: 's2', ptyId: 'pty-2', cwd: live.cwd, shell: 'wsl.exe', location: live },
+      { id: 's3', ptyId: '', cwd: '', shell: '', surfaceType: 'editor' },
+    ], 's3');
+
+    expect(activeSessionLocation(ws(root, 'p1'))).toBe(reconnecting);
+  });
+
   it('classifies the workspace fallback with the profile shell', () => {
     const workspace = {
       ...ws(leaf('p1', [], ''), 'p1'),
@@ -121,6 +238,34 @@ describe('activeSessionLocation', () => {
       cwd: 'C:\\dev\\fmux',
       shell: '',
     });
+  });
+});
+
+// The OTHER door onto `Surface.location`, and the reason there are two (issue
+// #46). `activeSessionLocation` above answers "where is the user working" and
+// must ignore an editor entirely; this one answers "which machine is this
+// surface's content on" and must still hand back the editor's own frozen value
+// — that is what `fs.readFile` translates the file's absolute path with.
+// Collapsing these two into one function is what put a snapshot on the wire.
+describe('sessionLocationForSurface — where a surface CONTENT lives', () => {
+  it('keeps an editor surface own frozen location', () => {
+    const stored = {
+      domain: 'wsl' as const,
+      cwd: '/home/me/proj',
+      shell: 'wsl.exe',
+      distro: 'Ubuntu',
+    };
+    const editor = {
+      id: 's1',
+      ptyId: '',
+      cwd: '',
+      shell: '',
+      surfaceType: 'editor',
+      editorFilePath: '/home/me/proj/a.ts',
+      location: stored,
+    } as any;
+
+    expect(sessionLocationForSurface(editor)).toBe(stored);
   });
 });
 

@@ -49,18 +49,60 @@ function wslWorkspace(): Workspace {
   } as unknown as Workspace;
 }
 
+/** Issue #46 — the same pane after its terminal moved, with a file opened
+ *  from where it used to be still the active tab. The editor surface froze its
+ *  location at creation and has no pty to key an update off, so it can only
+ *  ever name the old directory. */
+function movedTerminalWithStaleEditor(): Workspace {
+  return {
+    id: 'ws-1',
+    name: 'Alpha',
+    metadata: { cwd: 'C:\\dev\\mirror' },
+    rootPane: {
+      id: 'pane-1',
+      type: 'leaf',
+      surfaces: [
+        {
+          id: 'surf-1',
+          ptyId: 'pty-1',
+          title: 'term',
+          shell: 'wsl.exe',
+          cwd: '/home/me/moved',
+          location: { domain: 'wsl', cwd: '/home/me/moved', shell: 'wsl.exe', distro: 'Ubuntu' },
+        },
+        {
+          id: 'surf-2',
+          ptyId: '',
+          title: 'a.ts',
+          shell: '',
+          cwd: '',
+          surfaceType: 'editor',
+          editorFilePath: '/home/me/proj/a.ts',
+          location: { domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu' },
+        },
+      ],
+      activeSurfaceId: 'surf-2',
+    },
+    activePaneId: 'pane-1',
+  } as unknown as Workspace;
+}
+
 let container: HTMLDivElement;
 let root: Root;
 
-beforeEach(async () => {
-  readDir.mockClear();
-  status.mockClear();
+function load(workspace: Workspace): void {
   const data: SessionData = {
-    workspaces: [wslWorkspace()],
+    workspaces: [workspace],
     activeWorkspaceId: 'ws-1',
     sidebarVisible: true,
   } as SessionData;
   act(() => { useStore.getState().loadSession(data); });
+}
+
+beforeEach(async () => {
+  readDir.mockClear();
+  status.mockClear();
+  load(wslWorkspace());
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -84,5 +126,28 @@ describe('FileExplorerPopover — one location for both reads', () => {
     expect(readDir).toHaveBeenCalledWith('/home/me/proj', expected);
     expect(status).toHaveBeenCalledTimes(1);
     expect(status).toHaveBeenCalledWith(expected);
+  });
+
+  it('lists and badges where the pane is now, not where an editor tab was opened', async () => {
+    load(movedTerminalWithStaleEditor());
+    readDir.mockClear();
+    status.mockClear();
+
+    // Awaited, like the case above: the call-count assertion below is only
+    // meaningful once the reads have settled and any re-render they cause has
+    // had its chance to fire the effect a second time.
+    await act(async () => { root.render(createElement(FileExplorerPopover)); });
+
+    const moved = {
+      domain: 'wsl',
+      cwd: '/home/me/moved',
+      shell: 'wsl.exe',
+      distro: 'Ubuntu',
+    };
+    expect(readDir).toHaveBeenCalledWith('/home/me/moved', moved);
+    // The badges are the half that fails silently: `git:status` needs the live
+    // pane behind the location, and the stale snapshot names one nothing owns.
+    expect(status).toHaveBeenCalledTimes(1);
+    expect(status).toHaveBeenCalledWith(moved);
   });
 });

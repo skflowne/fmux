@@ -1,4 +1,4 @@
-import type { Workspace, Surface } from '../../shared/types';
+import type { Workspace, Surface, PaneLeaf } from '../../shared/types';
 import {
   classifySessionLocation,
   locationsEqual,
@@ -17,13 +17,16 @@ export function reuseEquivalentSessionLocation(
 }
 
 /**
- * The renderer's ONE surface→location derivation. Every file-reading surface
- * (file tree, explorer popover, editor, deck skill scan) resolves through this
- * or through `activeSessionLocation` below — hand-rolled pane walkers that
- * re-spell `location ?? classify(...)` are how the two drifted apart.
+ * Where a surface's CONTENT lives — which machine its file or directory is on.
+ * The renderer's ONE surface→location derivation: hand-rolled pane walkers that
+ * re-spell `location ?? classify(...)` are how the two owners drifted apart.
  *
  * A stored location is authoritative even when the legacy surface cwd is
  * empty. Surfaces with neither return null.
+ *
+ * This is NOT "where the user is working" — see `sessionLocationForPane`. For a
+ * surface with no pty of its own the two are different facts: an editor's file
+ * does not move when its pane's terminal does.
  */
 export function sessionLocationForSurface(surface: Surface | undefined): SessionLocation | null {
   if (!surface) return null;
@@ -36,13 +39,49 @@ export function sessionLocationForSurface(surface: Surface | undefined): Session
   });
 }
 
-/** Authoritative filesystem location for the active surface, including a
+/**
+ * The working location a surface PUBLISHES, which only a terminal has (issue
+ * #46). A browser, editor, or diff surface is created with `ptyId: ''`, and
+ * `updateSurfaceLocation` keys on the ptyId — so whatever such a surface holds
+ * is frozen at creation and structurally cannot follow the pane. Publishing it
+ * hands consumers an identity no live pane owns: `git:status` then finds no
+ * pane to run in and reports no change badges at all, silently.
+ *
+ * The predicate is on `surfaceType`, deliberately: a terminal in its reconnect
+ * window carries a stored location with no cwd, and must still publish it.
+ */
+function publishedSessionLocation(surface: Surface | undefined): SessionLocation | null {
+  if (!surface) return null;
+  if ((surface.surfaceType ?? 'terminal') !== 'terminal') return null;
+  return sessionLocationForSurface(surface);
+}
+
+/**
+ * Where the user is working in a pane — the sole owner of that fact, and the
+ * live one: it reads through to whichever terminal surface is publishing now.
+ *
+ * The pane's active terminal answers when there is one. Otherwise the first
+ * terminal in tab order does, which is an arbitrary but deterministic tie-break
+ * rather than a claim about which terminal the user meant.
+ */
+export function sessionLocationForPane(pane: PaneLeaf | null | undefined): SessionLocation | null {
+  if (!pane) return null;
+  const active = pane.surfaces.find((candidate) => candidate.id === pane.activeSurfaceId);
+  const fromActive = publishedSessionLocation(active);
+  if (fromActive) return fromActive;
+  for (const surface of pane.surfaces) {
+    const location = publishedSessionLocation(surface);
+    if (location) return location;
+  }
+  return null;
+}
+
+/** Authoritative filesystem location for the active pane, including a
  * classification fallback for sessions persisted before `location`. */
 export function activeSessionLocation(workspace: Workspace): SessionLocation | null {
   const leaf = findActiveLeaf(workspace.rootPane, workspace.activePaneId);
-  const surface = leaf?.surfaces.find((candidate) => candidate.id === leaf.activeSurfaceId);
-  const surfaceLocation = sessionLocationForSurface(surface);
-  if (surfaceLocation) return surfaceLocation;
+  const paneLocation = sessionLocationForPane(leaf);
+  if (paneLocation) return paneLocation;
   // Workspace-level fallback, for a workspace whose active pane holds no
   // terminal yet. `WorkspaceProfile.shell` is optional, so retain a usable
   // plain-host cwd without one. A shell-less guest cwd is classified as host
