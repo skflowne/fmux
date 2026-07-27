@@ -14,6 +14,7 @@
  * carries the active-session context that gate requires.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
 import os from 'node:os';
 import type { SessionLocation } from '../../../../shared/sessionLocation';
 import { createSessionCommandTarget } from '../../../../shared/sessionLocation';
@@ -176,6 +177,22 @@ describe('git:status — through the location execution API', () => {
       if (typeof payload !== 'string') livePane('pty-1', payload);
       await expect(gitStatus()(fakeEvent, payload)).resolves.toBe('');
     }
+    expect(execFileAsync).not.toHaveBeenCalled();
+  });
+
+  it('refuses a path that only reaches a sensitive directory once resolved', async () => {
+    // Written around it, and — for a host path, the one domain that has a host
+    // answer for `realpath` — linked to it.
+    vi.spyOn(fs.promises, 'realpath').mockResolvedValue(`${HOME}\\.ssh` as never);
+    await expect(gitStatus()(fakeEvent, `${HOME}\\proj`)).resolves.toBe('');
+
+    vi.spyOn(fs.promises, 'realpath').mockRejectedValue(new Error('ENOENT'));
+    const traversal: SessionLocation = {
+      domain: 'msys', cwd: '/c/Users/tester/proj/../.ssh', shell: MSYS_SHELL,
+    };
+    livePane('pty-1', traversal);
+    await expect(gitStatus()(fakeEvent, traversal)).resolves.toBe('');
+
     expect(execFileAsync).not.toHaveBeenCalled();
   });
 

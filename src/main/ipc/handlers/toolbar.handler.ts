@@ -1,4 +1,5 @@
 import { ipcMain, dialog, BrowserWindow } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { IPC } from '../../../shared/constants';
 import {
@@ -19,20 +20,31 @@ export type LivePaneTargetResolver = (
 ) => PaneCommandTarget | undefined;
 
 /**
- * The refusal `resolveAccessiblePath` used to carry into this channel.
+ * The refusal `resolveAccessiblePath` used to carry into this channel, kept at
+ * all three of the spellings it checked.
  *
- * It checked the path at each spelling it passed through, and the raw guest cwd
- * is the one spelling that hides a credential directory: `/c/Users/me/.ssh` and
- * `/mnt/c/Users/me/.ssh` are only recognisable once converted to their Windows
- * form. So this checks the location as given AND as the host sees it — one
- * narrowing accepted with issue #30: the old third check ran on the `realpath`
- * of the converted path, which a guest path has no host answer for, so a symlink
- * into a blocked directory is no longer caught here.
+ * The raw guest cwd is the one spelling that hides a credential directory —
+ * `/c/Users/me/.ssh` and `/mnt/c/Users/me/.ssh` are recognisable only once
+ * converted — and a symlink hides it from all three, which is why the last check
+ * runs on the canonical path. That last one is host-only: a guest path has no
+ * host `realpath`, so for msys and WSL the first two checks are the whole gate.
  */
-function refusesSensitivePath(location: SessionLocation): boolean {
+async function refusesSensitivePath(location: SessionLocation): Promise<boolean> {
   if (isSensitivePath(location.cwd, location)) return true;
   const accessible = toHostAccessiblePath(location, location.cwd);
-  return accessible.ok && isSensitivePath(path.resolve(accessible.path), location);
+  if (!accessible.ok) return false;
+  // Resolve `..` in the spelling the path is actually written in: these paths
+  // cross domains, so the running platform is not what decides it.
+  const shape = /^[A-Za-z]:[\\/]|^\\\\/.test(accessible.path) ? path.win32 : path.posix;
+  const resolved = shape.resolve(accessible.path);
+  if (isSensitivePath(resolved, location)) return true;
+  if (location.domain !== 'host') return false;
+  try {
+    return isSensitivePath(await fs.promises.realpath(resolved), location);
+  } catch {
+    // Nothing there to canonicalise. git will fail on it just as loudly.
+    return false;
+  }
 }
 
 export function registerToolbarHandlers(
@@ -58,7 +70,7 @@ export function registerToolbarHandlers(
   ipcMain.handle(IPC.GIT_STATUS, wrapHandler(IPC.GIT_STATUS, async (_event: Electron.IpcMainInvokeEvent, raw: unknown): Promise<string> => {
     const location = parseSessionLocation(raw);
     if (!location) return '';
-    if (refusesSensitivePath(location)) return '';
+    if (await refusesSensitivePath(location)) return '';
     const target = findLivePaneTarget(location) ?? locationCommandTarget(location);
     const result = await git(['status', '--porcelain'], target);
     // Fail-soft, as the renderer expects: any refusal or git error is "no
