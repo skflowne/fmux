@@ -314,12 +314,16 @@ describe('git:status and fs.readDir — one gate, one verdict', () => {
     // Both handlers register into the same map here, so one spec can drive the
     // one location through both under a single `realpath` answer.
     realpathSpy.mockResolvedValue(`${HOME}\\.ssh` as never);
+    // An empty listing is what a FAILED read returns too, so the refusal has to
+    // be pinned on the directory never being opened.
+    const readdirSpy = vi.spyOn(fs.promises, 'readdir').mockResolvedValue([] as never);
     const location: SessionLocation = {
       domain: 'msys', cwd: '/c/dev/proj', shell: MSYS_SHELL,
     };
     livePane('pty-1', location);
 
     await expect(readDir()(fakeEvent, { path: location.cwd, location })).resolves.toEqual([]);
+    expect(readdirSpy).not.toHaveBeenCalled();
     await expect(gitStatus()(fakeEvent, location)).resolves.toBe('');
     expect(execFileAsync).not.toHaveBeenCalled();
   });
