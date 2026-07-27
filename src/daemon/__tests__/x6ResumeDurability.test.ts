@@ -213,6 +213,25 @@ describe('X6 ② reboot-survival durability', () => {
     expect(recBody).toMatch(/resumeLaunchCommand\(session, spoolBindings\.get\(session\.id\)\)/);
   });
 
+  it('D5: the exec REPLAY launch requires PROVEN existence, not merely unproven absence', () => {
+    // The launch decision is one-shot — resumeLaunchCommand runs at recovery and
+    // no later poll can rewrite the command a pane already started with. A cold
+    // WSL distro at daemon boot answers nothing, so "cannot prove it dead" (right
+    // for the polling call sites) would hand a possibly purged id to
+    // `--resume`, which prints "No conversation found." and exits 0 with no exit
+    // code to fall back on. The polling sites must NOT be tightened with it: they
+    // are revisited, and requiring proof there is what dropped bindings in #29.
+    const src = fs.readFileSync(daemonIndexPath, 'utf-8');
+    const idx = src.indexOf('function resumeLaunchCommand');
+    expect(idx).toBeGreaterThan(-1);
+    const body = src.slice(idx, src.indexOf('\n}', idx));
+    expect(body).toMatch(
+      /bindingTranscriptLives\(binding, session, \{ requireProof: true \}\)/,
+    );
+    // ...and the strictness is opt-in per call site, not the probe's own rule.
+    expect(src).toMatch(/const probe = opts\?\.requireProof \? transcriptFileProvenLive : transcriptFileLives;/);
+  });
+
   it('Rung 3: spool ingest guards — F7 cwd-match, D5 existence-probe, no stale clobber', () => {
     const src = fs.readFileSync(daemonIndexPath, 'utf-8');
     const idx = src.indexOf('function ingestResumeSpool');

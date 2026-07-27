@@ -227,6 +227,13 @@ describe('toResumeCommand (X6)', () => {
       ).toBe('claude --continue');
     });
 
+    it('no usable binding → --continue with no flag, even opted in (U-PERM fail-safe)', () => {
+      // The D5 probe passes no binding when the exact transcript is not proven to
+      // exist, and the captured permission mode rides on that same binding. So the
+      // degraded launch must carry neither the exact id nor the bypass flag.
+      expect(toResumeCommand('claude', undefined, CWD, opt)).toBe('claude --continue');
+    });
+
     it('default OFF: bypass binding does NOT auto-add the flag (D6 fail-safe)', () => {
       expect(toResumeCommand('claude', binding({ permissionMode: 'bypassPermissions' }), CWD)).toBe(
         'claude --resume abc-123',
