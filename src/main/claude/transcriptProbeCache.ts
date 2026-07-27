@@ -25,8 +25,15 @@
  * That mechanism previously lived inline next to the probe itself with two write
  * paths whose error rules contradicted each other: the synchronous one recorded
  * every failure as "does not exist", while the asynchronous one refused to. Here
- * there is exactly one writer of an answer — `record` — and exactly one error
- * rule: an `unreachable` outcome never becomes an answer.
+ * there is exactly one writer of an answer — `applyOutcome` — and exactly one
+ * error rule: an `unreachable` outcome never becomes an answer.
+ *
+ * The bound, the FIFO eviction, the guard that stops a settled refresh writing
+ * into an entry that is no longer current, and the in-flight registry are not
+ * this module's: they are `BoundedRevalidatingStore`, shared with
+ * `GitSyncStatusCache` and `PrStatusCache`. What stays here is everything those
+ * two do differently — answering synchronously, revalidating out of band, and
+ * refusing to let a failure become an answer at all.
  *
  * Three states, not two. A key can be unknown (probe it, blocking, once), or
  * known-and-answered, or known-but-never-answered. The third state is what makes
@@ -34,6 +41,8 @@
  * block nor re-spawn, while recording no *answer*, so nothing can later mistake
  * it for evidence the transcript is gone.
  */
+
+import { BoundedRevalidatingStore, DEFAULT_CACHE_MAX } from '../cache/boundedRevalidatingStore';
 
 /**
  * The result of one probe attempt.
@@ -54,7 +63,8 @@ export interface ProbeAnswer {
 }
 
 export const DEFAULT_PROBE_TTL_MS = 30_000;
-export const DEFAULT_PROBE_CACHE_MAX = 256;
+/** This module's name for the shared ceiling; the value belongs to the store. */
+export const DEFAULT_PROBE_CACHE_MAX = DEFAULT_CACHE_MAX;
 
 /**
  * What a poll gets for a transcript that has never been answered for.
@@ -119,60 +129,53 @@ export function createTranscriptProbeCache(
   // once — the reference is captured at module load, which a caller that
   // controls time later could not then influence.
   const clock = options.now ?? (() => Date.now());
-  const entries = new Map<string, ProbeEntry>();
   /**
-   * Every refresh still running, including ones whose entry was evicted or reset
-   * away. Awaitability cannot hang off the entry alone: an eviction mid-refresh
-   * would drop the promise from view while the spawn is still live.
+   * Owns the ceiling, FIFO eviction, the identity guard on a settled refresh,
+   * and the in-flight registry that outlives its own entries — the last of
+   * those because awaitability cannot hang off the entry alone: an eviction
+   * mid-refresh would drop the promise from view while the spawn is still live.
    */
-  const inFlight = new Set<Promise<void>>();
+  const store = new BoundedRevalidatingStore<ProbeEntry>({ max });
 
   /**
    * The only writer of `answer`.
    *
-   * Both the first blocking probe and every out-of-band refresh that settles into
-   * its own entry land here — one whose entry was evicted or `reset` away is
-   * gated out below — which is what keeps the error rule single: an outcome that
-   * could not look is recorded as an attempt and nothing else. The stamp sits
-   * *above* the answered guard because a failed attempt is exactly what the
-   * retry throttle exists to space out; it supersedes the one `ensureRefresh`
-   * takes when the attempt starts, so a probe that settled `unreachable` slowly
-   * is not due again the moment it returns.
+   * Both the first blocking probe and every out-of-band refresh that settles
+   * into its own entry land here — one whose entry was evicted or `reset` away
+   * never gets this far, because the store refuses it — which is what keeps the
+   * error rule single: an outcome that could not look is recorded as an attempt
+   * and nothing else. The stamp sits *above* the answered guard because a failed
+   * attempt is exactly what the retry throttle exists to space out; it
+   * supersedes the one `ensureRefresh` takes when the attempt starts, so a probe
+   * that settled `unreachable` slowly is not due again the moment it returns.
    *
    * A refresh that *rejects* never reaches here — `ensureRefresh` swallows it —
    * so on that one path the start stamp is the throttle, and the next retry is
    * spaced from when the attempt began.
    */
-  function record(key: string, outcome: ProbeOutcome): void {
-    const entry = entries.get(key);
-    if (!entry) return;
+  function applyOutcome(entry: ProbeEntry, outcome: ProbeOutcome): void {
     entry.attemptedAt = clock();
     if (outcome.status !== 'answered') return;
     entry.answer = { lives: outcome.lives, at: entry.attemptedAt };
   }
 
   /**
-   * FIFO, at insertion — the only place an entry is created, so the bound holds
-   * for unanswered entries too. Map iteration is insertion-ordered and `record`
-   * never re-inserts, so the first key is the oldest.
+   * The only place an entry is created, so the store's bound holds for
+   * unanswered entries too.
    *
    * Evicting a key whose refresh is still in flight costs one extra probe: the
    * next sighting re-inserts and probes synchronously while the orphan finishes.
    * The orphan must not then write into the replacement, which is what the
-   * entry-identity check in `ensureRefresh` prevents.
+   * store's identity guard in `ensureRefresh` prevents.
    *
    * The `attemptedAt` given here only guarantees the field is defined: the
-   * `record` call below runs unconditionally on the entry just created and
-   * overwrites it, so no read ever sees this value. `record` is the effective
-   * writer on every path.
+   * `applyOutcome` call below runs unconditionally on the entry just created and
+   * overwrites it, so no read ever sees this value.
    */
   function insert(key: string, outcome: ProbeOutcome): void {
-    if (entries.size >= max) {
-      const oldest = entries.keys().next();
-      if (!oldest.done) entries.delete(oldest.value);
-    }
-    entries.set(key, { answer: null, attemptedAt: clock(), pending: null });
-    record(key, outcome);
+    const entry: ProbeEntry = { answer: null, attemptedAt: clock(), pending: null };
+    store.insert(key, entry);
+    applyOutcome(entry, outcome);
   }
 
   function ensureRefresh(
@@ -186,8 +189,8 @@ export function createTranscriptProbeCache(
     // would keep waking an idle distro indefinitely.
     if (clock() - entry.attemptedAt < ttlMs) return;
     // Stamped before the attempt, not only after it: a refresh that rejects is
-    // swallowed below without reaching `record`, and with no stamp at all every
-    // later poll would re-spawn against the guest that just failed.
+    // swallowed below without reaching `applyOutcome`, and with no stamp at all
+    // every later poll would re-spawn against the guest that just failed.
     entry.attemptedAt = clock();
     const pending: Promise<void> = (async () => {
       try {
@@ -196,22 +199,25 @@ export function createTranscriptProbeCache(
         // an eviction followed by a fresh probe, replaces that object — and a
         // stale answer must not overwrite the newer one, least of all in the
         // live-to-absent direction, nor restamp it with this older attempt.
-        if (entries.get(key) === entry) record(key, outcome);
+        store.settle(key, entry, (slot) => applyOutcome(slot, outcome));
       } catch {
         // A rejected probe is unreachable: keep the last known answer.
       }
     })().finally(() => {
-      inFlight.delete(pending);
-      const current = entries.get(key);
+      const current = store.peek(key);
       if (current?.pending === pending) current.pending = null;
     });
     entry.pending = pending;
-    inFlight.add(pending);
+    // Track the outermost promise — the one the `finally` above produced, not
+    // the async body it wraps — so a drain is ordered after the cleanup no
+    // matter where `track` sits relative to it. Tracking the inner promise
+    // happens to work today only because `.finally` is registered first.
+    store.track(pending);
   }
 
   return {
     lives(key, probeSync, probeAsync) {
-      const entry = entries.get(key);
+      const entry = store.peek(key);
       if (!entry) {
         const outcome = probeSync();
         insert(key, outcome);
@@ -222,15 +228,15 @@ export function createTranscriptProbeCache(
       return entry.answer ? entry.answer.lives : ASSUME_ALIVE_WHEN_UNPROVEN;
     },
     async whenIdle() {
-      await Promise.all([...inFlight]);
+      await store.whenIdle();
     },
     answerFor(key) {
-      return entries.get(key)?.answer ?? null;
+      return store.peek(key)?.answer ?? null;
     },
     reset() {
       // In-flight refreshes are deliberately left tracked so they stay
       // awaitable; each one finds its entry gone and writes nothing.
-      entries.clear();
+      store.clear();
     },
   };
 }
