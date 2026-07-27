@@ -7,6 +7,7 @@ import {
   hostCommandTarget,
   type PaneCommandTarget,
 } from '../git/paneCommand';
+import { BoundedRevalidatingStore } from '../cache/boundedRevalidatingStore';
 
 const execFileAsync = promisify(execFile);
 
@@ -44,8 +45,6 @@ function cacheKey(target: PaneCommandTarget, branch: string): string {
 
 const TTL_MS = 5 * 60 * 1000;
 const GH_TIMEOUT_MS = 10_000;
-/** Cache ceiling — evicts oldest entries; sized far above realistic pane counts. */
-const MAX_ENTRIES = 256;
 
 interface CacheEntry {
   value: PrStatus | null;
@@ -96,8 +95,21 @@ export function mapGhPrView(json: GhPrViewJson): PrStatus | null {
 }
 
 export class PrStatusCache {
-  private cache = new Map<string, CacheEntry>();
-  /** Tri-state gh availability: unknown until first probe. */
+  /**
+   * The bound, FIFO eviction and the identity guard on settled writes live in
+   * the store, shared with GitSyncStatusCache and transcriptProbeCache. What
+   * stays here is this cache's own policy: callers await the fetch, and a
+   * failed fetch is a real answer (null) cached for the TTL like any other.
+   */
+  private store = new BoundedRevalidatingStore<CacheEntry>();
+  /**
+   * Tri-state gh availability: unknown until first probe.
+   *
+   * Deliberately outside the store and outside the per-entry guard — it is
+   * process-wide, not per-key, and it is latched from inside `fetch`. Moving it
+   * under the guard would make an ENOENT that settles after an `invalidate`
+   * fail to latch, so a machine without gh would go on spawning it forever.
+   */
   private ghAvailable: boolean | null = null;
 
   constructor(
@@ -122,47 +134,53 @@ export class PrStatusCache {
       return null;
     }
     const key = cacheKey(target, branch);
-    const entry = this.cache.get(key);
+    const entry = this.store.peek(key);
     const now = this.now();
     if (entry) {
       if (entry.pending) return entry.pending;
       if (now - entry.fetchedAt < TTL_MS) return entry.value;
     }
 
-    const pending = this.fetch(target)
-      .then((value) => {
-        this.cache.set(key, { value, fetchedAt: this.now(), pending: null });
-        return value;
-      })
-      .catch(() => {
-        this.cache.set(key, { value: null, fetchedAt: this.now(), pending: null });
-        return null;
-      });
-    this.cache.set(key, {
+    // The entry this fetch belongs to. Held by reference so the settle below
+    // can be refused if the map has moved on — the PR-creation `invalidate`,
+    // a `clear`, or an eviction, any of which can land while gh runs.
+    const next: CacheEntry = {
       value: entry?.value ?? null,
       fetchedAt: entry?.fetchedAt ?? 0,
-      pending,
-    });
-    this.evictIfNeeded();
+      pending: null,
+    };
+    // Installed before the fetch starts, so the entry the settle matches against
+    // always exists by then — rather than relying on `fetch` being declared
+    // async and therefore unable to throw before the install below.
+    this.store.insert(key, next);
+    const pending = (async () => {
+      // `fetch` already resolves null on every failure path; the catch is a
+      // belt on top of that, not a second error rule.
+      const value = await this.fetch(target).catch(() => null);
+      // Clock read stays outside the mutate, so the mutate is assignments only
+      // and cannot throw. A throw in there would abandon `pending` half-cleared,
+      // leaving the entry holding a rejected promise that every later get()
+      // would return — and this cache's contract is that it never throws.
+      const fetchedAt = this.now();
+      this.store.settle(key, next, (slot) => {
+        slot.value = value;
+        slot.fetchedAt = fetchedAt;
+        slot.pending = null;
+      });
+      return value;
+    })();
+    next.pending = pending;
     return pending;
   }
 
   /** Drop a single cache entry (used when the branch changes so the next poll refetches). */
   invalidate(input: PaneCommandTarget | string, branch: string): void {
     const target = typeof input === 'string' ? hostCommandTarget(input) : input;
-    this.cache.delete(cacheKey(target, branch));
+    this.store.drop(cacheKey(target, branch));
   }
 
   clear(): void {
-    this.cache.clear();
-  }
-
-  private evictIfNeeded(): void {
-    while (this.cache.size > MAX_ENTRIES) {
-      const oldest = this.cache.keys().next().value;
-      if (oldest === undefined) break;
-      this.cache.delete(oldest);
-    }
+    this.store.clear();
   }
 
   private async fetch(target: PaneCommandTarget): Promise<PrStatus | null> {
