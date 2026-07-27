@@ -18,13 +18,14 @@ import { ghPrService } from '../../github/GhPrService';
 import {
   classifySessionLocation,
   createSessionCommandTarget,
+  locationIdentity,
   locationsEqual,
   type SessionLocation,
   type SessionLocationSnapshot,
 } from '../../../shared/sessionLocation';
 import { resolveWslDistro } from '../../pty/wslDistro';
 import { SessionLocationEnricher } from '../../../shared/sessionLocationEnrichment';
-import type { PaneCommandTarget } from '../../git/paneCommand';
+import { paneCommandIdentity, type PaneCommandTarget } from '../../git/paneCommand';
 import { resolveGitToplevel } from '../../git/git';
 import { isPlausibleSessionCwd } from '../../../shared/cwdShape';
 
@@ -552,6 +553,29 @@ export function getPaneCommandTarget(ptyId: string): PaneCommandTarget | undefin
   if (!identity || !cwd) return undefined;
   const location = classifySessionLocation(identity.shell, cwd, identity.distro);
   return createSessionCommandTarget(ptyId, location);
+}
+
+/**
+ * The live pane that owns `location`, if any.
+ *
+ * A consumer addressed by location rather than by pane — the toolbar's
+ * `git:status`, whose payload is the active surface's location — still needs the
+ * live pane behind it, because only a live pane carries the active-session
+ * context `preparePaneCommand` requires before it will run anything in a guest
+ * (issue #30). The match is `locationIdentity`, which both sides derive from the
+ * same `classifySessionLocation`, so a pane that has moved on or whose distro is
+ * still unresolved simply does not match instead of answering for the wrong
+ * guest. Panes that do match are interchangeable: same domain, distro and cwd.
+ */
+export function findPaneCommandTargetForLocation(
+  location: SessionLocation,
+): PaneCommandTarget | undefined {
+  const wanted = locationIdentity(location);
+  for (const ptyId of paneIdentities.keys()) {
+    const target = getPaneCommandTarget(ptyId);
+    if (target && paneCommandIdentity(target) === wanted) return target;
+  }
+  return undefined;
 }
 
 export function getBranch(ptyId: string): string | undefined {

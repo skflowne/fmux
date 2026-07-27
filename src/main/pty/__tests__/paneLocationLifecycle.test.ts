@@ -5,6 +5,7 @@ import {
   updatePaneLocation,
   removePaneLocation,
   getPaneCommandTarget,
+  findPaneCommandTargetForLocation,
   removeCwd,
 } from '../../ipc/handlers/metadata.handler';
 
@@ -163,6 +164,70 @@ describe('I1 — a live WSL pane can be acted on in its first session', () => {
     updatePaneLocation(ptyId, { domain: 'host', cwd: 'C:\\repo', shell: 'pwsh.exe' });
     updateCwd(ptyId, 'C:\\repo');
     expect(resolveWslDistro).not.toHaveBeenCalled();
+    reset(ptyId);
+  });
+});
+
+/**
+ * Issue #30 — a consumer that holds a location, not a ptyId (the toolbar's
+ * `git:status` payload is the active surface's location) still has to reach the
+ * live pane behind it: only a live pane carries the active-session context
+ * `preparePaneCommand` demands before it will run anything in a guest.
+ */
+describe('the live pane behind a location', () => {
+  it('returns the pane whose current location matches, with its active context', () => {
+    const ptyId = 'pty-find-wsl';
+    reset(ptyId);
+    updatePaneLocation(ptyId, {
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    });
+    updateCwd(ptyId, '/home/me/proj');
+
+    const target = findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    })!;
+    expect(target.sessionId).toBe(ptyId);
+    expect(preparePaneCommand(target, 'git', ['status'])).toEqual({
+      ok: true,
+      file: 'wsl.exe',
+      args: ['-d', 'Ubuntu', '--cd', '/home/me/proj', '--exec', 'git', 'status'],
+    });
+    reset(ptyId);
+  });
+
+  it('does not match another distro, a moved cwd, or a closed pane', () => {
+    const ptyId = 'pty-find-mismatch';
+    reset(ptyId);
+    updatePaneLocation(ptyId, {
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    });
+    updateCwd(ptyId, '/home/me/proj');
+
+    expect(findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Debian',
+    })).toBeUndefined();
+
+    // The pane `cd`s away: the old location no longer has a live owner.
+    updateCwd(ptyId, '/home/me/other');
+    expect(findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    })).toBeUndefined();
+
+    reset(ptyId);
+    expect(findPaneCommandTargetForLocation({
+      domain: 'wsl', cwd: '/home/me/other', shell: 'wsl.exe', distro: 'Ubuntu',
+    })).toBeUndefined();
+  });
+
+  it('matches a host pane through the same identity rule', () => {
+    const ptyId = 'pty-find-host';
+    reset(ptyId);
+    updatePaneLocation(ptyId, { domain: 'host', cwd: 'C:\\dev\\proj', shell: 'pwsh.exe' });
+    updateCwd(ptyId, 'C:\\dev\\proj');
+
+    expect(findPaneCommandTargetForLocation({
+      domain: 'host', cwd: 'C:\\dev\\proj', shell: 'pwsh.exe',
+    })?.sessionId).toBe(ptyId);
     reset(ptyId);
   });
 });
