@@ -201,28 +201,6 @@ export function registerFsHandlers(): () => void {
     }
   }));
 
-  ipcMain.removeHandler(IPC.FS_WRITE_FILE);
-  ipcMain.handle(IPC.FS_WRITE_FILE, wrapHandler(IPC.FS_WRITE_FILE, async (_event: Electron.IpcMainInvokeEvent, raw: unknown, content: string): Promise<boolean> => {
-    const req = readFileLocationRequest(raw);
-    if (!req) return false;
-    const filePath = req.path;
-    if (typeof filePath !== 'string' || typeof content !== 'string') return false;
-    const accessible = toHostAccessiblePath(req.location, filePath);
-    if (!accessible.ok) return false;
-    const resolved = path.resolve(accessible.path);
-    // Only allow writing CLAUDE.md files (for persona injection)
-    if (path.basename(resolved) !== 'CLAUDE.md') return false;
-    // Size limit: 100KB
-    if (content.length > 100 * 1024) return false;
-    try {
-      await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
-      await fs.promises.writeFile(resolved, content, 'utf-8');
-      return true;
-    } catch {
-      return false;
-    }
-  }));
-
   ipcMain.removeHandler(IPC.FS_WATCH);
   ipcMain.handle(IPC.FS_WATCH, wrapHandler(IPC.FS_WATCH, async (_event: Electron.IpcMainInvokeEvent, raw: unknown) => {
     const req = readFileLocationRequest(raw);
@@ -295,7 +273,6 @@ export function registerFsHandlers(): () => void {
   return () => {
     ipcMain.removeHandler(IPC.FS_READ_DIR);
     ipcMain.removeHandler(IPC.FS_READ_FILE);
-    ipcMain.removeHandler(IPC.FS_WRITE_FILE);
     ipcMain.removeHandler(IPC.FS_WATCH);
     ipcMain.removeHandler(IPC.FS_UNWATCH);
     closeAllWatchers();

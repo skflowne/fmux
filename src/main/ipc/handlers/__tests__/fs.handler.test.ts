@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerFsHandlers, resolveAccessiblePath } from '../fs.handler';
@@ -27,7 +26,6 @@ describe('resolveAccessiblePath', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(os, 'homedir').mockReturnValue(home);
     realpathSpy = vi.spyOn(fs.promises, 'realpath');
   });
 
@@ -142,7 +140,7 @@ describe('resolveAccessiblePath', () => {
         location: { domain: 'host', cwd: hostPath, shell: 'pwsh.exe' },
       },
     )).resolves.toEqual([]);
-    expect(realpathSpy).toHaveBeenCalled();
+    expect(realpathSpy).toHaveBeenCalledWith(hostPath);
   });
 
   // Issue #21: `msys` is a legal wire domain. The handler used to re-declare
@@ -268,7 +266,6 @@ describe('fs:read-dir in a credential directory', () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.spyOn(os, 'homedir').mockReturnValue(HOME);
     vi.spyOn(fs.promises, 'realpath').mockImplementation(async (t) => t as string);
     vi.spyOn(fs.promises, 'readdir').mockResolvedValue([
       { name: 'id_rsa', isDirectory: () => false, isSymbolicLink: () => false },

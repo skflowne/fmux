@@ -159,9 +159,11 @@ export default function EditorPanel({ filePath, isActive, surfaceId, location }:
         {/* No Save button: the panel is a read-only viewer with a local-only
             edit/scratch mode (changes are not persisted). A disabled "Save not
             available yet" button read as unfinished; removed (NN5-T5-ALT).
-            Finishing persistence would require relaxing the CLAUDE.md-only
-            FS_WRITE_FILE allowlist (a renderer write-power expansion) — out of
-            scope for the read-only viewer the README documents. */}
+            There is no renderer write channel to finish this against: the
+            unused `fs:write-file` one was deleted with issue #48, so
+            persistence would mean adding write power back rather than relaxing
+            a limit — out of scope for the read-only viewer the README
+            documents. */}
       </div>
 
       {/* Body */}

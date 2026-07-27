@@ -742,8 +742,6 @@ const electronAPI = {
       ipcRenderer.invoke(IPC.FS_READ_DIR, { path: dirPath, location }),
     readFile: (filePath: string, location: import('../shared/sessionLocation').SessionLocation) =>
       ipcRenderer.invoke(IPC.FS_READ_FILE, { path: filePath, location }) as Promise<string | null>,
-    writeFile: (filePath: string, content: string, location: import('../shared/sessionLocation').SessionLocation) =>
-      ipcRenderer.invoke(IPC.FS_WRITE_FILE, { path: filePath, location }, content) as Promise<boolean>,
     watch: (dirPath: string, location: import('../shared/sessionLocation').SessionLocation) =>
       ipcRenderer.invoke(IPC.FS_WATCH, { path: dirPath, location }),
     unwatch: (dirPath: string, location: import('../shared/sessionLocation').SessionLocation) =>
