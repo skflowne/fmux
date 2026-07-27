@@ -762,8 +762,9 @@ function ingestResumeSpool(
     // here — an unreachable guest answers "cannot prove it dead" — so an idle
     // distro at boot no longer drops the record. It is still unlinked either way
     // (`drop()` here, the ingest's own `drop()` below); what differs is that the
-    // ingested binding reaches `managed.meta` and the state write first, so the
-    // capture survives the unlink instead of being lost with the spool file.
+    // ingested binding is written into `managed.meta` before its unlink, so the
+    // capture outlives the spool file rather than going with it. The state flush
+    // comes after the whole drain, so a crash between the two still loses it.
     if (!bindingTranscriptLives(binding, managed.meta)) { drop(); continue; }
 
     managed.meta.resumeBinding = mergeResumeBinding(prev, binding);

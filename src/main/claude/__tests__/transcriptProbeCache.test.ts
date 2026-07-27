@@ -240,6 +240,17 @@ describe('transcript probe cache', () => {
     clock.advance(TTL);
     expect(cache.lives('k', probe, refresh)).toBe(true);
     expect(refresh).toHaveBeenCalledTimes(2);
+
+    // …and it is the start that is stamped, not the settlement — the difference
+    // the name claims. This second attempt hangs for longer than a TTL before
+    // rejecting, so by the time it fails it is already due again and the next
+    // poll retries at once. A completion stamp would have pushed it out another
+    // full TTL, which is what `record` does for a settled `unreachable`.
+    clock.advance(TTL * 2);
+    fail(new Error('spawn failed'));
+    await cache.whenIdle();
+    expect(cache.lives('k', probe, refresh)).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(3);
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
