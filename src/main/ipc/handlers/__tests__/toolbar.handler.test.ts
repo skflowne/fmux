@@ -15,7 +15,6 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
-import path from 'node:path';
 import type { SessionLocation } from '../../../../shared/sessionLocation';
 import { createSessionCommandTarget } from '../../../../shared/sessionLocation';
 import type { PaneCommandTarget } from '../../../git/paneCommand';
@@ -48,7 +47,12 @@ import { IPC } from '../../../../shared/constants';
 import { registerToolbarHandlers } from '../toolbar.handler';
 
 const fakeEvent = {} as Electron.IpcMainInvokeEvent;
-const hostCwd = path.join('C:', 'dev', 'proj');
+// Windows spellings on purpose, as literals: these paths cross a domain
+// conversion, and `path.join` would spell them POSIX-style on the Linux and
+// macOS CI legs.
+const hostCwd = 'C:\\dev\\proj';
+const HOME = 'C:\\Users\\tester';
+const MSYS_SHELL = 'C:\\Program Files\\Git\\bin\\bash.exe';
 const PORCELAIN = ' M src/index.ts\n';
 
 /** The live panes this test's registry knows, keyed the way the handler asks. */
@@ -73,7 +77,7 @@ function ranCommand(): [string, string[]] {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  vi.spyOn(os, 'homedir').mockReturnValue(path.join('C:', 'Users', 'tester'));
+  vi.spyOn(os, 'homedir').mockReturnValue(HOME);
   handlers.clear();
   livePanes.clear();
   execFileAsync.mockReset();
@@ -106,11 +110,22 @@ describe('git:status — through the location execution API', () => {
     expect(execFileAsync).not.toHaveBeenCalled();
   });
 
+  it('refuses a WSL pane that has not resolved its distro, at the shared gate', async () => {
+    // The pane is live; the command still cannot be built, because the API
+    // will not guess which guest to run in. A handler spelling `wsl.exe -d …`
+    // itself has nothing to consult here and would run against `undefined`.
+    const location: SessionLocation = { domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe' };
+    livePane('pty-1', location);
+
+    await expect(gitStatus()(fakeEvent, location)).resolves.toBe('');
+    expect(execFileAsync).not.toHaveBeenCalled();
+  });
+
   it('runs host git in the Windows directory an MSYS location names', async () => {
     await expect(gitStatus()(fakeEvent, {
       domain: 'msys',
       cwd: '/c/dev/proj',
-      shell: 'C:\\Program Files\\Git\\bin\\bash.exe',
+      shell: MSYS_SHELL,
     })).resolves.toBe(PORCELAIN);
 
     expect(ranCommand()).toEqual(['git', ['status', '--porcelain']]);
@@ -123,17 +138,21 @@ describe('git:status — through the location execution API', () => {
     expect(execFileAsync.mock.calls[0][2]).toMatchObject({ cwd: hostCwd });
   });
 
-  it('never converts a location into a path argument', async () => {
-    for (const payload of [
-      hostCwd,
-      { domain: 'msys', cwd: '/c/dev/proj', shell: 'C:\\Program Files\\Git\\bin\\bash.exe' },
-    ]) {
-      execFileAsync.mockClear();
-      await gitStatus()(fakeEvent, payload);
-      const [, args] = ranCommand();
-      expect(args).not.toContain('-C');
-      expect(args.join(' ')).not.toMatch(/wsl\.localhost|wsl\$/i);
-    }
+  it('never hands the guest directory to a Windows-side git', async () => {
+    const location: SessionLocation = {
+      domain: 'wsl', cwd: '/home/me/proj', shell: 'wsl.exe', distro: 'Ubuntu',
+    };
+    livePane('pty-1', location);
+    await gitStatus()(fakeEvent, location);
+
+    const [file, args] = ranCommand();
+    const options = execFileAsync.mock.calls[0][2] as { cwd?: string };
+    expect(`${file} ${args.join(' ')} ${options?.cwd ?? ''}`)
+      .not.toMatch(/wsl\.localhost|wsl\$/i);
+    // A guest directory is where the command RUNS, never an argument to a
+    // command running somewhere else.
+    expect(args).not.toContain('-C');
+    expect(options?.cwd).toBeUndefined();
   });
 
   it('reports no status rather than a partial one when git fails', async () => {
@@ -143,9 +162,20 @@ describe('git:status — through the location execution API', () => {
     await expect(gitStatus()(fakeEvent, hostCwd)).resolves.toBe('');
   });
 
-  it('keeps refusing a sensitive directory', async () => {
-    await expect(gitStatus()(fakeEvent, path.join('C:', 'Users', 'tester', '.ssh')))
-      .resolves.toBe('');
+  it('keeps refusing a sensitive directory, in every spelling of it', async () => {
+    // A credential directory named the way each domain names it. The guest
+    // spellings are the ones a raw-cwd check cannot see: they only look like
+    // `C:\Users\tester\.ssh` once converted.
+    const blocked: Array<string | SessionLocation> = [
+      `${HOME}\\.ssh`,
+      { domain: 'msys', cwd: '/c/Users/tester/.ssh', shell: MSYS_SHELL },
+      { domain: 'wsl', cwd: '/mnt/c/Users/tester/.ssh', shell: 'wsl.exe', distro: 'Ubuntu' },
+      { domain: 'wsl', cwd: '/home/me/.aws', shell: 'wsl.exe', distro: 'Ubuntu' },
+    ];
+    for (const payload of blocked) {
+      if (typeof payload !== 'string') livePane('pty-1', payload);
+      await expect(gitStatus()(fakeEvent, payload)).resolves.toBe('');
+    }
     expect(execFileAsync).not.toHaveBeenCalled();
   });
 
