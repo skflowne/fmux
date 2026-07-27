@@ -142,3 +142,135 @@ describe('GitSyncStatusCache', () => {
     expect(exec).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Issue 42 — a fetch that settles after its entry is gone must write nothing.
+ *
+ * Every case here mutates the cache map in the window between a fetch starting
+ * and settling. That window is the whole bug, and no test above ever opened it:
+ * the pre-existing `invalidate()` test drops the entry only after awaiting the
+ * fetch, so nothing is ever in flight when the map changes.
+ *
+ * The trigger is live, not theoretical — `WorkspaceContextRouter.ts` invalidates
+ * this cache on every HEAD move (branch switch, commit, reset), while the 5 s
+ * metadata poll has a `git status` open against the same key.
+ */
+describe('GitSyncStatusCache — orphaned settled fetches', () => {
+  const status = (ahead: number) =>
+    `# branch.head main\n# branch.upstream origin/main\n# branch.ab +${ahead} -0\n`;
+  const parsed = (ahead: number) => ({ dirty: 0, ahead, behind: 0, hasUpstream: true });
+
+  /** An exec whose every call is settled by the test, in call order. */
+  function deferredExec() {
+    const settles: Array<(v: { stdout: string }) => void> = [];
+    const exec = vi.fn().mockImplementation(
+      () => new Promise<{ stdout: string }>((resolve) => { settles.push(resolve); }),
+    );
+    return { exec, settles };
+  }
+
+  it('an invalidate mid-fetch is not undone by the settled write', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new GitSyncStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'));
+    cache.invalidate('D:/repo');
+    settles[0]({ stdout: status(1) });
+    await inFlight;
+
+    // The entry was dropped, so the next poll must go back to git.
+    const next = cache.get(host('D:/repo'));
+    expect(exec).toHaveBeenCalledTimes(2);
+    settles[1]({ stdout: status(1) });
+    await next;
+  });
+
+  it('an orphaned fetch does not overwrite the newer entry that replaced it', async () => {
+    // A moving clock, so this also pins *when* the surviving entry says it was
+    // fetched. With a frozen clock the settled write could skip its timestamp
+    // entirely and nothing would notice — and an entry whose age never advances
+    // re-spawns git on every poll once its first window closes.
+    let now = 0;
+    const { exec, settles } = deferredExec();
+    const cache = new GitSyncStatusCache(() => now, exec);
+
+    const gen1 = cache.get(host('D:/repo'));
+    cache.invalidate('D:/repo');
+    const gen2 = cache.get(host('D:/repo'));
+    expect(exec).toHaveBeenCalledTimes(2);
+
+    now = 1_000;
+    settles[1]({ stdout: status(9) });
+    await gen2;
+    // The pre-invalidate fetch lands last, carrying the pre-commit answer.
+    now = 2_000;
+    settles[0]({ stdout: status(1) });
+    await gen1;
+
+    // Inside gen2's window, measured from gen2's own stamp of 1_000.
+    now = 15_000;
+    expect(await cache.get(host('D:/repo'))).toEqual(parsed(9));
+    expect(exec).toHaveBeenCalledTimes(2);
+
+    // Past it: the entry must age from gen2's stamp, not from 0 and not from
+    // the orphan's later one.
+    now = 16_001;
+    const third = cache.get(host('D:/repo'));
+    expect(exec).toHaveBeenCalledTimes(3);
+    settles[2]({ stdout: status(5) });
+    expect(await third).toEqual(parsed(5));
+  });
+
+  it('a clear mid-fetch is not undone by the settled write', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new GitSyncStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'));
+    cache.clear();
+    settles[0]({ stdout: status(1) });
+    await inFlight;
+
+    const next = cache.get(host('D:/repo'));
+    expect(exec).toHaveBeenCalledTimes(2);
+    settles[1]({ stdout: status(1) });
+    await next;
+  });
+
+  it('a fetch evicted mid-flight does not resurrect its key or clobber the refetch', async () => {
+    const evicted: Array<(v: { stdout: string }) => void> = [];
+    const exec = vi.fn().mockImplementation((_file: string, _args: string[], opts: { cwd?: string }) => {
+      if (opts.cwd === 'D:/repo0') {
+        return new Promise<{ stdout: string }>((resolve) => { evicted.push(resolve); });
+      }
+      return Promise.resolve({ stdout: status(0) });
+    });
+    const cache = new GitSyncStatusCache(() => 0, exec);
+
+    const orphan = cache.get(host('D:/repo0'));
+    // 256 further keys push the ceiling past the entry the orphan belongs to.
+    for (let i = 1; i <= 256; i++) await cache.get(host(`D:/filler${i}`));
+
+    const refetch = cache.get(host('D:/repo0'));
+    expect(evicted).toHaveLength(2); // it really was evicted and probed again
+    evicted[1]({ stdout: status(9) });
+    await refetch;
+
+    evicted[0]({ stdout: status(1) });
+    await orphan;
+
+    expect(await cache.get(host('D:/repo0'))).toEqual(parsed(9));
+  });
+
+  it('still resolves the original caller with the value its own fetch returned', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new GitSyncStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'));
+    cache.invalidate('D:/repo');
+    settles[0]({ stdout: status(3) });
+
+    // Quiet absence is the contract: dropping the entry must not make an
+    // outstanding get() hang or throw.
+    await expect(inFlight).resolves.toEqual(parsed(3));
+  });
+});

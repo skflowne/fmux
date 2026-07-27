@@ -171,3 +171,144 @@ describe('PrStatusCache', () => {
     );
   });
 });
+
+/**
+ * Issue 42 — the same orphaned-settle audit as GitSyncStatusCache, which this
+ * cache's `get` duplicates line for line.
+ *
+ * The live trigger here is PR creation: `TaskPrService` invalidates the entry
+ * the moment the PR exists, precisely so the badge does not wait out the TTL.
+ * An orphaned write puts the "no PR" answer back with a fresh timestamp, and
+ * this cache's TTL is five minutes.
+ */
+describe('PrStatusCache — orphaned settled fetches', () => {
+  const prJson = (number: number) =>
+    JSON.stringify({ number, state: 'OPEN', isDraft: false, url: `https://x/pull/${number}`, statusCheckRollup: [] });
+
+  function deferredExec() {
+    const settles: Array<(v: { stdout: string }) => void> = [];
+    const exec = vi.fn().mockImplementation(
+      () => new Promise<{ stdout: string }>((resolve) => { settles.push(resolve); }),
+    );
+    return { exec, settles };
+  }
+
+  it('an invalidate mid-fetch is not undone by the settled write', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new PrStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'), 'main');
+    cache.invalidate('D:/repo', 'main');
+    settles[0]({ stdout: prJson(7) });
+    await inFlight;
+
+    const next = cache.get(host('D:/repo'), 'main');
+    expect(exec).toHaveBeenCalledTimes(2);
+    settles[1]({ stdout: prJson(7) });
+    await next;
+  });
+
+  it('an orphaned fetch does not overwrite the newer entry that replaced it', async () => {
+    // A moving clock, so this also pins *when* the surviving entry says it was
+    // fetched. With a frozen clock the settled write could skip its timestamp
+    // entirely and nothing would notice — and an entry whose age never advances
+    // re-spawns gh on every poll once its first window closes.
+    let now = 0;
+    const { exec, settles } = deferredExec();
+    const cache = new PrStatusCache(() => now, exec);
+
+    const gen1 = cache.get(host('D:/repo'), 'main');
+    cache.invalidate('D:/repo', 'main');
+    const gen2 = cache.get(host('D:/repo'), 'main');
+    expect(exec).toHaveBeenCalledTimes(2);
+
+    now = 1_000;
+    settles[1]({ stdout: prJson(99) });
+    await gen2;
+    now = 2_000;
+    settles[0]({ stdout: prJson(7) });
+    await gen1;
+
+    // Inside gen2's window, measured from gen2's own stamp of 1_000.
+    now = 300_000;
+    expect((await cache.get(host('D:/repo'), 'main'))?.number).toBe(99);
+    expect(exec).toHaveBeenCalledTimes(2);
+
+    // Past it: the entry must age from gen2's stamp, not from 0 and not from
+    // the orphan's later one.
+    now = 301_001;
+    const third = cache.get(host('D:/repo'), 'main');
+    expect(exec).toHaveBeenCalledTimes(3);
+    settles[2]({ stdout: prJson(123) });
+    expect((await third)?.number).toBe(123);
+  });
+
+  it('a clear mid-fetch is not undone by the settled write', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new PrStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'), 'main');
+    cache.clear();
+    settles[0]({ stdout: prJson(7) });
+    await inFlight;
+
+    const next = cache.get(host('D:/repo'), 'main');
+    expect(exec).toHaveBeenCalledTimes(2);
+    settles[1]({ stdout: prJson(7) });
+    await next;
+  });
+
+  it('a fetch evicted mid-flight does not resurrect its key or clobber the refetch', async () => {
+    const evicted: Array<(v: { stdout: string }) => void> = [];
+    const exec = vi.fn().mockImplementation((_file: string, _args: string[], opts: { cwd?: string }) => {
+      if (opts.cwd === 'D:/repo0') {
+        return new Promise<{ stdout: string }>((resolve) => { evicted.push(resolve); });
+      }
+      return Promise.resolve({ stdout: prJson(1) });
+    });
+    const cache = new PrStatusCache(() => 0, exec);
+
+    const orphan = cache.get(host('D:/repo0'), 'main');
+    for (let i = 1; i <= 256; i++) await cache.get(host(`D:/filler${i}`), 'main');
+
+    const refetch = cache.get(host('D:/repo0'), 'main');
+    expect(evicted).toHaveLength(2);
+    evicted[1]({ stdout: prJson(99) });
+    await refetch;
+
+    evicted[0]({ stdout: prJson(7) });
+    await orphan;
+
+    expect((await cache.get(host('D:/repo0'), 'main'))?.number).toBe(99);
+  });
+
+  it('still resolves the original caller with the value its own fetch returned', async () => {
+    const { exec, settles } = deferredExec();
+    const cache = new PrStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'), 'main');
+    cache.invalidate('D:/repo', 'main');
+    settles[0]({ stdout: prJson(7) });
+
+    await expect(inFlight).resolves.toMatchObject({ number: 7 });
+  });
+
+  it('an ENOENT that settles after an invalidate still latches gh as unavailable', async () => {
+    let reject!: (e: unknown) => void;
+    const exec = vi.fn().mockImplementation(
+      () => new Promise<{ stdout: string }>((_resolve, r) => { reject = r; }),
+    );
+    const cache = new PrStatusCache(() => 0, exec);
+
+    const inFlight = cache.get(host('D:/repo'), 'main');
+    cache.invalidate('D:/repo', 'main');
+    reject(Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }));
+    expect(await inFlight).toBeNull();
+
+    // The breaker is process-wide and lives inside fetch, deliberately outside
+    // the per-entry guard: losing the entry must not make a gh-less machine
+    // spawn gh forever.
+    expect(await cache.get(host('D:/other'), 'main')).toBeNull();
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+});
