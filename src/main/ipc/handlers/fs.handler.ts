@@ -1,6 +1,5 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { IPC } from '../../../shared/constants';
 import {
@@ -22,51 +21,6 @@ export interface FileEntry {
 const watchers = new Map<string, fs.FSWatcher>();
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const MAX_WATCHERS = 100;
-
-const BLOCKED_DIRS = [
-  '.ssh',
-  '.aws',
-  '.gnupg',
-  '.gpg',
-  '.config/gcloud',
-  '.azure',
-  '.kube',
-  '.docker/config.json',
-];
-
-const BLOCKED_FILES = [
-  '.fmux-auth-token',
-  '.npmrc',
-  '.netrc',
-  '.env',
-  '.fmux/daemon-auth-token',
-];
-
-function isBlockedHomeRelative(relativePath: string): boolean {
-  const normalized = relativePath.replace(/^\/+/, '').toLowerCase();
-  for (const dir of BLOCKED_DIRS) {
-    const blocked = dir.toLowerCase();
-    if (normalized === blocked || normalized.startsWith(`${blocked}/`)) return true;
-  }
-  return BLOCKED_FILES.some((file) => normalized === file.toLowerCase());
-}
-
-function homeRelativePath(
-  candidatePath: string,
-  guestPath: string | null,
-): string | null {
-  const normalized = candidatePath.replace(/\\/g, '/');
-  const home = os.homedir().replace(/\\/g, '/');
-  if (normalized.toLowerCase().startsWith(`${home.toLowerCase()}/`)) {
-    return normalized.slice(home.length + 1);
-  }
-
-  if (!guestPath) return null;
-  const userHome = /^\/home\/[^/]+(?:\/(.*))?$/i.exec(guestPath);
-  if (userHome) return userHome[1] ?? '';
-  const rootHome = /^\/root(?:\/(.*))?$/i.exec(guestPath);
-  return rootHome ? rootHome[1] ?? '' : null;
-}
 
 /**
  * A path that lives in a DIFFERENT distribution than the location names.
@@ -96,23 +50,6 @@ function isForeignDistroPath(
 ): boolean {
   const guest = toWslGuestPath(location, candidatePath);
   return !guest.ok && guest.error === 'WSL_DISTRO_MISMATCH';
-}
-
-export function isSensitivePath(
-  resolvedPath: string,
-  location?: SessionLocation,
-): boolean {
-  const normalized = resolvedPath.replace(/\\/g, '/').toLowerCase();
-
-  // Block Windows credential stores
-  if (process.platform === 'win32') {
-    if (normalized.includes('/appdata/roaming/microsoft/credentials')) return true;
-    if (normalized.includes('/appdata/local/microsoft/credentials')) return true;
-  }
-
-  const guest = toWslGuestPath(location, resolvedPath);
-  const homeRelative = homeRelativePath(resolvedPath, guest.ok ? guest.path : null);
-  return homeRelative !== null && isBlockedHomeRelative(homeRelative);
 }
 
 interface FileLocationRequest {
@@ -159,94 +96,47 @@ function resolveInPathShape(accessiblePath: string): string {
   return (windowsShaped ? path.win32 : path.posix).resolve(accessiblePath);
 }
 
-type PathClearance =
-  | { refused: true }
-  | { refused: false; canonical: string | null };
-
 /**
- * The sensitive-path refusal, at all three of the spellings a credential
- * directory can hide in — and the canonical path it cleared, for the caller
- * that is about to read it.
+ * The host path a read should actually be performed against, or `null` when
+ * there is nothing here to read.
  *
- * ONE implementation, because the invariant is a pair: a path this app refuses
- * to browse (`fs.readDir`) is a path it refuses to run git in (`git:status`).
- * A second copy that narrowed any pass would let one channel serve what the
- * other declines.
+ * A path in a location travels through three spellings: the raw one the pane
+ * wrote, the converted one the host can reach, and the canonical one behind
+ * any link. This resolves that chain and returns the last of them, so a caller
+ * vets and reads against ONE canonicalisation rather than two.
  *
- * The passes, and why each exists:
- *  1. The raw cwd, which is the only pass that can see a guest spelling —
- *     `/home/me/.ssh` is recognisable here and nowhere else.
- *  2. The converted path resolved in its own shape, which catches the guest
- *     spellings that only look like a credential directory once converted
- *     (`/c/Users/me/.ssh`, `/mnt/c/Users/me/.ssh`) and any `..` written around
- *     one.
- *  3. The canonical path, which is the only pass that sees a link or junction
- *     into one. It runs for EVERY domain: msys converts to a drive path and
- *     wsl to its `\\wsl.localhost` namespace, so the host has a real answer for
- *     both. Accepted cost: `git:status` for a WSL pane pays one host round trip
- *     over the share per call, even though the command itself runs in the
- *     guest. Skipping it there would mean this app refuses to LIST a guest
- *     symlink into `~/.ssh` while happily running git inside it, which is the
- *     whole invariant.
+ * `null` is returned for a path with no host spelling (an unconvertible guest
+ * path — whether such a location may run anything at all belongs to the
+ * execution API, not here), for one the host cannot canonicalise, and for one
+ * `isForeignDistroPath` says belongs to another guest.
  *
- * Passes 1 and 3 also ask `isForeignDistroPath`, which is a separate question
- * with its own reachability — see its comment.
- *
- * Fails closed: a path the host cannot canonicalise is one nothing cleared,
- * not one nothing objected to. An unconvertible guest path is different — there
- * is no host spelling to resolve, pass 1 already cleared the cwd, and whether
- * such a location may run anything belongs to the execution API's rules, not
- * to this gate.
+ * This function does NOT judge what is stored at the path. It used to: a
+ * blocklist refused `~/.ssh`, `~/.aws` and friends on the read channels. Issue
+ * #48 removed it — every caller passes the pane's own cwd, a descendant of it,
+ * or a path the user clicked; a renderer able to supply anything else can call
+ * `pty:create` and read the same bytes through a shell; and `docs/SECURITY.md`
+ * §3 puts same-user disclosure out of scope. All it did in practice was render
+ * an empty file explorer, indistinguishable from an empty directory, for
+ * anyone who legitimately `cd`'d into a credential directory.
  */
-async function clearSensitivePath(
-  location: SessionLocation,
-  inputPath: string,
-  convert: LocationPathOperation,
-): Promise<PathClearance> {
-  if (isForeignDistroPath(location, inputPath)) return { refused: true };
-  if (isSensitivePath(inputPath, location)) return { refused: true };
-
-  const accessible = convert(location, inputPath);
-  if (!accessible.ok) return { refused: false, canonical: null };
-  const resolved = resolveInPathShape(accessible.path);
-  if (isSensitivePath(resolved, location)) return { refused: true };
-
-  try {
-    const canonical = await fs.promises.realpath(resolved);
-    if (isForeignDistroPath(location, canonical)) return { refused: true };
-    return isSensitivePath(canonical, location)
-      ? { refused: true }
-      : { refused: false, canonical };
-  } catch {
-    return { refused: true };
-  }
-}
-
-/**
- * Does the gate refuse this location? The whole answer for a caller that never
- * touches the host path — `git:status`, which runs its git IN the location.
- *
- * `resolveAccessiblePath` shares the same gate but consumes the canonical path
- * it cleared rather than calling through here, so that a read is vetted and
- * performed against one canonicalisation instead of two.
- */
-export async function refusesSensitivePath(
-  location: SessionLocation,
-  inputPath: string = location.cwd,
-  convert: LocationPathOperation = toHostAccessiblePath,
-): Promise<boolean> {
-  return (await clearSensitivePath(location, inputPath, convert)).refused;
-}
-
 export async function resolveAccessiblePath(
   inputPath: string,
   location: SessionLocation = hostLocation(inputPath),
   convert: LocationPathOperation = toHostAccessiblePath,
 ): Promise<string | null> {
   if (!inputPath || typeof inputPath !== 'string') return null;
-  const clearance = await clearSensitivePath(location, inputPath, convert);
-  // An unconvertible path is not refused, but there is nothing here to read.
-  return clearance.refused ? null : clearance.canonical;
+  if (isForeignDistroPath(location, inputPath)) return null;
+
+  const accessible = convert(location, inputPath);
+  if (!accessible.ok) return null;
+  const resolved = resolveInPathShape(accessible.path);
+
+  try {
+    const canonical = await fs.promises.realpath(resolved);
+    return isForeignDistroPath(location, canonical) ? null : canonical;
+  } catch {
+    return null;
+  }
 }
 
 export function closeAllWatchers(): void {
@@ -320,7 +210,6 @@ export function registerFsHandlers(): () => void {
     const accessible = toHostAccessiblePath(req.location, filePath);
     if (!accessible.ok) return false;
     const resolved = path.resolve(accessible.path);
-    if (isSensitivePath(resolved)) return false;
     // Only allow writing CLAUDE.md files (for persona injection)
     if (path.basename(resolved) !== 'CLAUDE.md') return false;
     // Size limit: 100KB
